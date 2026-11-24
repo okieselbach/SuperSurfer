@@ -170,11 +170,17 @@ enum ProfileShortcutRules {
         return initial
     }
 
-    /// Which entry of the browser's profile menu stands for a profile, given
-    /// the titles the profile may have there, most likely first. The first
-    /// of them that the menu has at all decides, and only if exactly one
-    /// entry carries it: two profiles can go by one name.
-    static func entry(for wanted: [String], in titles: [String]) -> Int? {
+    /// Which entry of the browser's profile menu stands for a profile.
+    ///
+    /// `wanted` are the titles the profile may have there, most likely
+    /// first. The first of them that the menu has at all decides, and only
+    /// if exactly one entry carries it: two profiles can go by one name.
+    ///
+    /// A browser may dress the name up in a way nobody foresaw ("Work -
+    /// ada@example.com"). When none of the titles is there, an entry that
+    /// has the profile's own name in it as a word of its own is taken, again
+    /// only if it is the only one.
+    static func entry(for wanted: [String], named name: String, in titles: [String]) -> Int? {
         let shown = titles.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         for candidate in wanted {
             let title = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -183,7 +189,35 @@ enum ProfileShortcutRules {
                 return hits.count == 1 ? hits[0] : nil
             }
         }
-        return nil
+        let own = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hits = shown.indices.filter { mentions(shown[$0], own) }
+        return hits.count == 1 ? hits[0] : nil
+    }
+
+    /// Whether `title` has `name` in it as a word of its own: "Ada (Work)"
+    /// mentions "Work", "HomeWork" and "Work2" do not.
+    static func mentions(_ title: String, _ name: String) -> Bool {
+        guard !name.isEmpty else {
+            return false
+        }
+        func isPartOfWord(_ character: Character?) -> Bool {
+            guard let character = character else {
+                return false
+            }
+            return character.isLetter || character.isNumber
+        }
+        var rest = title.startIndex..<title.endIndex
+        while let found = title.range(of: name, options: [], range: rest) {
+            let before: Character? = found.lowerBound == title.startIndex
+                ? nil
+                : title[title.index(before: found.lowerBound)]
+            let after: Character? = found.upperBound == title.endIndex ? nil : title[found.upperBound]
+            if !isPartOfWord(before) && !isPartOfWord(after) {
+                return true
+            }
+            rest = title.index(after: found.lowerBound)..<title.endIndex
+        }
+        return false
     }
 
     /// An .icns file made of PNG images. `pixels` is the width of an image,
@@ -676,6 +710,7 @@ final class ProfileShortcuts {
         let profile = listed?.profiles.first { $0.directory == shortcut.directory }
         let browserPath = listed?.appPath ?? shortcut.browserPath
         let titles = profile?.menuTitles ?? shortcut.menuTitles
+        let name = profile?.name ?? shortcut.profileName
         let arguments = profile?.launchArgs ?? shortcut.launchArguments
         let bundleID = listed?.bundleId ?? Bundle(path: browserPath)?.bundleIdentifier
 
@@ -703,7 +738,7 @@ final class ProfileShortcuts {
         if browser.isHidden {
             browser.unhide()
         }
-        switch ProfileShortcuts.pressProfileEntry(of: browser.processIdentifier, titled: titles) {
+        switch ProfileShortcuts.pressProfileEntry(of: browser.processIdentifier, titled: titles, named: name) {
         case .pressed(let title):
             ProfileShortcuts.bringForward(browser)
             let took = (ProcessInfo.processInfo.systemUptime - asked) * 1000
@@ -747,7 +782,7 @@ final class ProfileShortcuts {
 
     /// Finds the browser's profile menu and presses the entry that stands
     /// for the profile.
-    private static func pressProfileEntry(of pid: pid_t, titled wanted: [String]) -> Press {
+    private static func pressProfileEntry(of pid: pid_t, titled wanted: [String], named name: String) -> Press {
         let app = patient(AXUIElementCreateApplication(pid))
         guard let found = AX.value(app, kAXMenuBarAttribute),
               CFGetTypeID(found) == AXUIElementGetTypeID() else {
@@ -764,7 +799,7 @@ final class ProfileShortcuts {
                 }
                 let entries = items.filter(isProfileEntry)
                 let titles = entries.map { AX.string($0, kAXTitleAttribute) ?? "" }
-                guard let index = ProfileShortcutRules.entry(for: wanted, in: titles) else {
+                guard let index = ProfileShortcutRules.entry(for: wanted, named: name, in: titles) else {
                     return .noEntry(titles)
                 }
                 let result = AXUIElementPerformAction(
@@ -874,18 +909,27 @@ final class ProfileShortcuts {
                 && Rules.badge(for: "  ", among: names) == "?"
         )
 
+        let signedIn = ["Ada (Work)", "Work", "Ada"]
         check(
             "dock shortcut: the menu entry of a profile",
-            Rules.entry(for: ["Ada (Work)", "Work", "Ada"], in: ["Ada", "Ada (Work)", "Dev"]) == 1
-                && Rules.entry(for: ["Ada (Work)", "Work", "Ada"], in: ["Personal", "Work"]) == 1
-                && Rules.entry(for: ["Work"], in: ["Personal", " Work "]) == 1
+            Rules.entry(for: signedIn, named: "Work", in: ["Ada", "Ada (Work)", "Dev"]) == 1
+                && Rules.entry(for: signedIn, named: "Work", in: ["Personal", "Work"]) == 1
+                && Rules.entry(for: ["Work"], named: "Work", in: ["Personal", " Work "]) == 1
+                && Rules.entry(for: ["Work"], named: "Work", in: ["Ada (Work)", "Work"]) == 1
         )
         check(
             "dock shortcut: no entry where two go by the name, or none",
-            Rules.entry(for: ["Work"], in: ["Work", "Work"]) == nil
-                && Rules.entry(for: ["Ada", "Work"], in: ["Ada", "Ada", "Work"]) == nil
-                && Rules.entry(for: ["Work"], in: ["Personal"]) == nil
-                && Rules.entry(for: [], in: ["Personal"]) == nil
+            Rules.entry(for: ["Work"], named: "Work", in: ["Work", "Work"]) == nil
+                && Rules.entry(for: ["Ada", "Work"], named: "Work", in: ["Ada", "Ada", "Work"]) == nil
+                && Rules.entry(for: ["Work"], named: "Work", in: ["Personal"]) == nil
+                && Rules.entry(for: [], named: "", in: ["Personal"]) == nil
+        )
+        check(
+            "dock shortcut: a name dressed up in a way nobody foresaw is still found",
+            Rules.entry(for: ["Work"], named: "Work", in: ["Personal", "Work - ada@example.com"]) == 1
+                && Rules.entry(for: ["Work"], named: "Work", in: ["Ada (Work)", "Ada (Dev)"]) == 0
+                && Rules.entry(for: ["Work"], named: "Work", in: ["HomeWork", "Work2", "Personal"]) == nil
+                && Rules.entry(for: ["Work"], named: "Work", in: ["Ada (Work)", "Bob (Work)"]) == nil
         )
 
         let wrapped = Rules.icns([(pixels: 128, png: Data([1, 2, 3]))])
