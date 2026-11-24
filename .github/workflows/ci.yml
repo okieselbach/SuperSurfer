@@ -201,7 +201,7 @@ jobs:
 
           **Windows:** run \`supersurfer.exe init --register\`, then set SuperSurfer as default under Settings → Apps → Default apps.
 
-          **macOS:** unzip into \`/Applications\`, then \`/Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer register\`. The app is not notarized yet, so macOS refuses a downloaded copy until you run \`xattr -cr /Applications/SuperSurfer.app\`.
+          **macOS:** unzip into \`/Applications\`. The app is not notarized yet, so macOS refuses a downloaded copy until you run \`xattr -cr /Applications/SuperSurfer.app\`. Then \`/Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer register\`.
 
           **Linux:** extract the tarball for your arch and run \`./install.sh\`.
 
