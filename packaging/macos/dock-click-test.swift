@@ -296,6 +296,13 @@ func isInFront(_ app: NSRunningApplication) -> Bool {
     return NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
 }
 
+/// Hidden the way ⌘H hides: no window left on screen and the app says so.
+/// Which app is in front afterwards is not asked: macOS 26 leaves a hidden
+/// Finder there.
+func isHidden(_ app: NSRunningApplication) -> Bool {
+    return windowsOnScreen(app) == 0 && app.isHidden
+}
+
 func state(of app: NSRunningApplication) -> String {
     let front = NSWorkspace.shared.frontmostApplication.map(name) ?? "nothing"
     return "\(name(app)): \(windowsOnScreen(app)) windows on screen, \(minimizedWindows(app)) minimized, "
@@ -402,15 +409,15 @@ func preflight() -> Never {
 func hideAndBack(_ app: NSRunningApplication, held: TimeInterval = 0.08) {
     click(app, held: held)
     expect("\(name(app)) is hidden", of: app) {
-        windowsOnScreen(app) == 0 && !isInFront(app)
+        isHidden(app)
     }
     pause(0.8)
     click(app, held: held)
     expect("\(name(app)) is back", of: app) {
-        windowsOnScreen(app) > 0 && isInFront(app)
+        windowsOnScreen(app) > 0 && isInFront(app) && !app.isHidden
     }
     stays("and stays", of: app, for: 2) {
-        windowsOnScreen(app) > 0 && isInFront(app)
+        windowsOnScreen(app) > 0 && isInFront(app) && !app.isHidden
     }
 }
 

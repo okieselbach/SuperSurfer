@@ -146,7 +146,7 @@ Only a plain click counts, and only on the icon of an app that was in front *bef
 
 macOS ties this permission to the app's signature, and releases are not signed with a Developer ID yet. After an update the switch in System Settings still looks on but no longer counts: remove SuperSurfer from that list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
 
-**What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. Each click then costs one question to the Dock, asked on a queue of its own: never on the main thread, never on the queue that routes links, and with a timeout of 0.4 s. Between clicks the app is as idle as before.
+**What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. For each click SuperSurfer looks up which app is in front and asks the Dock one question. The lookup runs on the main thread when the button goes down and took about half a millisecond on GitHub's macOS runner. That is over before a link opened by the same click can arrive. The question to the Dock is asked on a queue of its own, never on the main thread or the queue that routes links, with a timeout of 0.4 s. Memory use grew by about 0.2 MB in the same measurement. Between clicks the app is as idle as before.
 
 ## Saved rules (`rules.json`)
 
