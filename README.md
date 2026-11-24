@@ -182,7 +182,7 @@ Like Dock Click this has nothing to do with routing links, and none of it runs u
 **What stays different from Windows.**
 
 - A shortcut is an icon of its own. While the browser runs, the browser's icon is in the Dock as well, and the dot for a running app is under that one.
-- The click first starts the small app. On GitHub's macOS runners that took 0.1 to 0.2 s, and two to three seconds the first time a new shortcut was used.
+- The click first starts the small app. On GitHub's macOS runners that took 0.1 to 0.2 s, and two to three seconds the first time a new shortcut was used. SuperSurfer then needed another 0.01 to 0.13 s, most of it waiting for the browser.
 - A shortcut remembers the folder the browser keeps the profile in, so renaming the profile does not break it. Its own name and badge stay as they were: remove it and make it again for new ones.
 - **Remove Shortcut** deletes the app. The Dock keeps a question mark in its place until you drag that out.
 
@@ -194,7 +194,7 @@ log show --last 5m --predicate 'process == "SuperSurfer"'
 
 **Which browsers.** Edge and Chrome. Their Beta and Canary builds and Chromium have the same menu and are offered as well, untried. Firefox is not offered: it runs every profile as an app of its own, which has its own Dock icon while it runs. Safari is not offered either: its profiles cannot be reached from outside.
 
-**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It runs in CI on macOS 15. Not tested: profiles that are signed in to an account (the rule for their names follows Chromium's source and is checked against made-up data; what Edge does with a Microsoft account is not known), a browser in another language, the Beta and Canary builds, and macOS 27.
+**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It runs in CI on macOS 15 and has passed on GitHub's macOS 26 runner. Not tested: profiles that are signed in to an account (the rule for their names follows Chromium's source and is checked against made-up data; what Edge does with a Microsoft account is not known), a browser in another language, the Beta and Canary builds, and macOS 27.
 
 ## Saved rules (`rules.json`)
 
@@ -326,7 +326,7 @@ Dock Click has a test of its own, which clicks real Dock icons and checks what h
 
 ```bash
 bash packaging/macos/dock-click-test.sh
-SUPERSURFER_DOCK_CLICK=hide dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --resident   # or minimize: try it without storing the choice; prints a line per Dock click
+SUPERSURFER_DOCK_CLICK=hide dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --resident   # or minimize: try it without storing the choice; prints a line per Dock click, and one for each other window that gets a click
 ```
 
 The Dock shortcuts have one too. It starts Edge and Chrome with profiles of its own, so quit both first, and it takes five minutes:
