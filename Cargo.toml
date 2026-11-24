@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 description = "Cross-platform default browser router with JavaScript config"
 license = "MIT"
-repository = "https://github.com/Jabe/SuperSurfer"
+repository = "https://github.com/okieselbach/SuperSurfer"
 
 [dependencies]
 anyhow = "1"

@@ -19,7 +19,7 @@ Config locations:
 
 ## Install per platform
 
-Download the matching artifact from [Releases](https://github.com/Jabe/SuperSurfer/releases).
+Download the matching artifact from [Releases](https://github.com/okieselbach/SuperSurfer/releases).
 
 ### macOS
 
@@ -149,4 +149,4 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 
 **A saved rule is ignored** — a `handlers` entry in `config.js` matches the same link and comes first. `supersurfer test <url>` prints a `rule:` line when a saved rule decided.
 
-Repository: [github.com/Jabe/SuperSurfer](https://github.com/Jabe/SuperSurfer)
+Repository: [github.com/okieselbach/SuperSurfer](https://github.com/okieselbach/SuperSurfer)
