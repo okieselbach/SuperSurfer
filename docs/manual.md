@@ -131,12 +131,13 @@ macOS ties the permission to the app's signature. Releases are not signed with a
 
 ### Dock Click
 
-Clicking the Dock icon of the app you are already in does nothing on macOS. Choose **Dock Click → Hide App** or **Minimize Windows** in the menu and that click puts the app away; the next click on the icon brings it back. With *Minimize Windows*, every window the app has on the current Space goes into the Dock, and all of them come back together.
+Clicking the Dock icon of the app you are already in normally does nothing on macOS. Choose **Dock Click → Hide App** or **Minimize Windows** in the menu and that click puts the app away; the next click on the icon brings it back. With *Minimize Windows*, every window the app has on the current Space goes into the Dock, and all of them come back together.
 
 It is off by default and unrelated to routing links.
 
 - The first time, macOS asks for the Accessibility permission: System Settings → Privacy & Security → **Accessibility**, switch on SuperSurfer. It works from the next click. While the permission is missing, the menu entry shows ⚠︎ and says what to do.
-- Only a plain click on the icon of the app that is already in front counts. Clicks on other icons, long presses and clicks with ⌘, ⌥, ⌃ or ⇧ work as always.
+- Only a plain click on the icon of the app that has been in front for a moment counts. Clicks on other icons, long presses, clicks with ⌘, ⌥, ⌃ or ⇧, and clicks while Mission Control, App Exposé or Show Desktop is up work as always.
+- *Minimize Windows* makes the Dock shift its icons, because every minimized window gets a place there. With System Settings → Desktop & Dock → **Minimize windows into application icon** switched on, the icons stay put and the next click lands on the same icon.
 - Windows on other Spaces and full-screen windows are not minimized.
 
 macOS ties the permission to the app's signature. Releases are not signed with a Developer ID yet, so expect to give it again after an update: remove SuperSurfer from the Accessibility list and add it again.

@@ -130,23 +130,35 @@ Some apps use ⌥-click themselves (browsers download the link target). Pick ano
 
 ### Dock Click
 
-Clicking the Dock icon of the app you are already in does nothing on macOS. **Dock Click** in the menu gives that click a job, as on Windows and most Linux desktops:
+Clicking the Dock icon of the app you are already in normally does nothing on macOS. **Dock Click** in the menu gives that click a job, as on Windows and most Linux desktops:
 
 | Choice | A click on the icon of the app in front | The next click on the icon |
 |---|---|---|
 | **Hide App** | hides the app, like ⌘H | shows it again (macOS does that by itself) |
-| **Minimize Windows** | sends every window the app has on the current Space into the Dock | brings back all of them, where macOS alone would bring back one |
+| **Minimize Windows** | sends every window the app has on the current Space into the Dock | brings back all of them, where macOS alone brings back one |
 | **Off** *(default)* | nothing | |
 
 This has nothing to do with routing links. It is here because SuperSurfer is loaded anyway, which is cheaper than one more menu bar utility. While it is off, nothing is installed and no permission is needed.
 
-Only a plain click counts, and only on the icon of an app that was in front *before* the click. Everything else stays with the Dock: a click on another app's icon switches to that app, a long press opens the icon's menu, and a click with ⌘, ⌥, ⌃ or ⇧ held keeps the meaning macOS gives it. A double click ends where it began: its second click never puts anything away, and brings back what the first one put away. An app with no window on screen is left alone too, because there the click is how you ask for one.
+**When it acts.** On a plain click on the Dock icon of the app that has been in front for at least three quarters of a second, and only if the Dock itself makes nothing of that click. Everything else is left to the Dock:
+
+- a click on the icon of another app, which switches to that app, and a second click on it while the app is still arriving;
+- a long press, which opens the icon's menu, and a click with ⌘, ⌥, ⌃ or ⇧ held;
+- a click while Mission Control, App Exposé or Show Desktop is up, where it is the way back to the app (a force click on the icon opens App Exposé);
+- a click on the icon of an app without a window on screen, which is how you ask for one;
+- a click on a menu, a notification or any other window that happens to lie over the icon.
+
+A double click ends where it began: its second click never puts anything away, and brings back what the first one put away.
+
+**Minimize Windows moves the Dock.** Every minimized window gets a place in the Dock, and the Dock shifts its icons to make room, so after the click the pointer may no longer be on the app's icon. Switch on System Settings → Desktop & Dock → *Minimize windows into application icon* and the icons stay where they are. *Hide App* never moves anything. Windows on other Spaces and full-screen windows are not minimized. If you bring one of the minimized windows back by hand, Dock Click forgets the others; they stay where you left them.
 
 **Permission.** The first time you choose *Hide App* or *Minimize Windows*, macOS asks for the Accessibility permission (System Settings → Privacy & Security → Accessibility). SuperSurfer needs it to ask the Dock which icon is under the pointer and to minimize another app's windows. It works from the next click. Until the permission is there, the menu entry carries a ⚠︎ and clicks behave as always.
 
 macOS ties this permission to the app's signature, and releases are not signed with a Developer ID yet. After an update the switch in System Settings still looks on but no longer counts: remove SuperSurfer from that list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
 
-**What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. For each click SuperSurfer looks up which app is in front and asks the Dock one question. The lookup runs on the main thread when the button goes down and took about half a millisecond on GitHub's macOS runner. That is over before a link opened by the same click can arrive. The question to the Dock is asked on a queue of its own, never on the main thread or the queue that routes links, with a timeout of 0.4 s. Memory use grew by about 0.2 MB in the same measurement. Between clicks the app is as idle as before.
+**What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. The window server writes into each click which window it went to, and for a click that did not go to the Dock reading that is all that happens. Only a click on the Dock leads to more: a look at which app is in front, on the main thread, and a question to the Dock about the icon, on a queue of its own with a timeout of 0.4 s. Minimizing and restoring windows runs on a second queue. Neither the main thread nor the queue that routes links ever waits for another app. Between clicks the app is as idle as before.
+
+**Tested, and not.** `packaging/macos/dock-click-test.sh` clicks real Dock icons and runs in CI on macOS 15. It covers what is listed above except the long press, modifier keys and the force click, which a test cannot produce or which only the rules in `--self-test` cover. Not tested at all: an app with windows on more than one Space (macOS then answers the click by moving to the other Space; Dock Click steps aside if it sees the Space or the app's windows change in time), several displays, and Stage Manager.
 
 ## Saved rules (`rules.json`)
 
