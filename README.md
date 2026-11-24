@@ -2,9 +2,9 @@
 
 **One config. Every browser. macOS · Windows · Linux.**
 
-[![Release](https://img.shields.io/github/v/release/Jabe/SuperSurfer)](https://github.com/Jabe/SuperSurfer/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/Jabe/SuperSurfer/ci.yml?branch=main)](https://github.com/Jabe/SuperSurfer/actions)
-[![License: MIT](https://img.shields.io/github/license/Jabe/SuperSurfer)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/okieselbach/SuperSurfer)](https://github.com/okieselbach/SuperSurfer/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/okieselbach/SuperSurfer/ci.yml?branch=main)](https://github.com/okieselbach/SuperSurfer/actions)
+[![License: MIT](https://img.shields.io/github/license/okieselbach/SuperSurfer)](LICENSE)
 
 SuperSurfer registers as your OS default browser, intercepts every link open, evaluates a JavaScript routing config, and forwards the URL to the right browser/profile.
 
@@ -22,14 +22,14 @@ A [Finicky](https://github.com/johnste/finicky)-style router that also runs on W
 
 ## Install
 
-Binaries are on the [Releases](https://github.com/Jabe/SuperSurfer/releases) page. Direct links always point at the latest:
+Binaries are on the [Releases](https://github.com/okieselbach/SuperSurfer/releases) page. Direct links always point at the latest:
 
 | Platform | Download |
 |---|---|
-| Windows x86_64 | [`supersurfer.exe`](https://github.com/Jabe/SuperSurfer/releases/latest/download/supersurfer.exe) |
-| macOS Apple Silicon | [`SuperSurfer.app.zip`](https://github.com/Jabe/SuperSurfer/releases/latest/download/SuperSurfer.app.zip) |
-| Linux x86_64 | [`supersurfer-linux-x86_64.tar.gz`](https://github.com/Jabe/SuperSurfer/releases/latest/download/supersurfer-linux-x86_64.tar.gz) |
-| Linux aarch64 | [`supersurfer-linux-aarch64.tar.gz`](https://github.com/Jabe/SuperSurfer/releases/latest/download/supersurfer-linux-aarch64.tar.gz) |
+| Windows x86_64 | [`supersurfer.exe`](https://github.com/okieselbach/SuperSurfer/releases/latest/download/supersurfer.exe) |
+| macOS Apple Silicon | [`SuperSurfer.app.zip`](https://github.com/okieselbach/SuperSurfer/releases/latest/download/SuperSurfer.app.zip) |
+| Linux x86_64 | [`supersurfer-linux-x86_64.tar.gz`](https://github.com/okieselbach/SuperSurfer/releases/latest/download/supersurfer-linux-x86_64.tar.gz) |
+| Linux aarch64 | [`supersurfer-linux-aarch64.tar.gz`](https://github.com/okieselbach/SuperSurfer/releases/latest/download/supersurfer-linux-aarch64.tar.gz) |
 
 Then register SuperSurfer as the default browser and try a dry-run:
 
@@ -260,7 +260,7 @@ CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" mise run packag
 
 ### Windows — `supersurfer.exe`
 
-Download `supersurfer.exe` from [Releases](https://github.com/Jabe/SuperSurfer/releases), or build locally.
+Download `supersurfer.exe` from [Releases](https://github.com/okieselbach/SuperSurfer/releases), or build locally.
 
 On Windows, or cross-compile from macOS/Linux (`mise` installs `zig`; first run may install `cargo-zigbuild`):
 
@@ -279,7 +279,7 @@ On Windows:
 
 ### Linux — `supersurfer`
 
-Download the tarball for your arch from [Releases](https://github.com/Jabe/SuperSurfer/releases). Builds are dynamically linked glibc binaries for **x86_64** and **aarch64**. Release artifacts are built on Ubuntu 22.04 (glibc 2.35) as the minimum supported baseline; newer distros work too.
+Download the tarball for your arch from [Releases](https://github.com/okieselbach/SuperSurfer/releases). Builds are dynamically linked glibc binaries for **x86_64** and **aarch64**. Release artifacts are built on Ubuntu 22.04 (glibc 2.35) as the minimum supported baseline; newer distros work too.
 
 **x86_64 (Intel/AMD):**
 ```bash
