@@ -78,6 +78,9 @@ elif [ "$STATUS" -ne 0 ]; then
   exit "$STATUS"
 fi
 
+echo "== without SuperSurfer"
+"$DRIVER" control
+
 # Finishes first-run setup for the scratch HOME, so the app does not open the
 # manual in a browser when it starts.
 mkdir -p "$SUPPORT"
@@ -103,6 +106,11 @@ for MODE in hide minimize; do
 
   STATUS=0
   "$DRIVER" "$MODE" || STATUS=$?
+  if command -v footprint >/dev/null 2>&1; then
+    # What Activity Monitor shows in its Memory column, with Dock Click used.
+    FOOTPRINT="$(footprint "$PID" 2>/dev/null || true)"
+    printf '%s\n' "$FOOTPRINT" | grep -i "footprint:" | head -n 1 || true
+  fi
   stop_app
   sed 's/^/trace: /' "$TRACE"
   if [ "$STATUS" -ne 0 ]; then

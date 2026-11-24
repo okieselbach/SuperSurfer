@@ -6,6 +6,7 @@ import Cocoa
 // hardware posts them, and checks what became of the app's windows.
 //
 //   dock-click-test preflight   can this session do that at all? (77: no)
+//   dock-click-test control     SuperSurfer is not running
 //   dock-click-test hide        SuperSurfer runs with Dock Click on "hide"
 //   dock-click-test minimize    SuperSurfer runs with Dock Click on "minimize"
 
@@ -314,6 +315,20 @@ func finderWithWindow() -> NSRunningApplication {
     return bringToFront("Finder", "com.apple.finder", windows: 1)
 }
 
+/// What the other tests take for granted: by itself, macOS does nothing when
+/// the icon of the app in front is clicked. If a later macOS did, Dock Click
+/// would undo it.
+func testControl() {
+    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    for (label, held) in [("click", 0.08), ("tap", 0.004)] {
+        click(calculator, held: held)
+        stays("a \(label) on the icon of the app in front changes nothing", of: calculator, for: 2) {
+            windowsOnScreen(calculator) > 0 && isInFront(calculator)
+        }
+    }
+    calculator.terminate()
+}
+
 func testHide() {
     let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
     say("      \(state(of: calculator))")
@@ -440,12 +455,14 @@ func testMinimize() {
 switch CommandLine.arguments.dropFirst().first {
 case "preflight":
     preflight()
+case "control":
+    testControl()
 case "hide":
     testHide()
 case "minimize":
     testMinimize()
 default:
-    say("usage: dock-click-test preflight | hide | minimize")
+    say("usage: dock-click-test preflight | control | hide | minimize")
     exit(2)
 }
 say("passed")

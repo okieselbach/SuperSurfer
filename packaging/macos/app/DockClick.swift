@@ -120,6 +120,10 @@ private final class Press {
     let front: NSRunningApplication?
     /// Set and read on the worker queue only.
     var plan = Plan.nothing
+    /// What the click cost on the main thread and, before anything was done
+    /// about it, on the worker queue. Only read for the `--resident` trace.
+    var mainTime: TimeInterval = 0
+    var workerTime: TimeInterval = 0
 
     init(time: TimeInterval, point: CGPoint, mode: DockClick, front: NSRunningApplication?) {
         self.time = time
@@ -403,6 +407,7 @@ final class DockClickController {
             worker.async {
                 self.prepare(started)
             }
+            started.mainTime = ProcessInfo.processInfo.systemUptime - now
 
         case .leftMouseUp:
             guard let ended = press else {
@@ -414,6 +419,7 @@ final class DockClickController {
                 return
             }
             let wait = max(0, DockClickController.settleTime - (now - event.timestamp))
+            ended.mainTime += ProcessInfo.processInfo.systemUptime - now
             worker.asyncAfter(deadline: .now() + wait) {
                 self.perform(ended)
             }
@@ -428,6 +434,10 @@ final class DockClickController {
     /// Runs while the button is still down: works out what a click here would
     /// mean, from the state before the Dock has done anything about it.
     private func prepare(_ press: Press) {
+        let began = ProcessInfo.processInfo.systemUptime
+        defer {
+            press.workerTime = ProcessInfo.processInfo.systemUptime - began
+        }
         switch press.mode {
         case .off:
             return
@@ -471,6 +481,14 @@ final class DockClickController {
     /// Runs once the click is complete and the Dock has had `settleTime` for
     /// its own part.
     private func perform(_ press: Press) {
+        if case .nothing = press.plan {
+            return
+        }
+        DockClickController.trace(String(
+            format: "%.3f ms on the main thread, %.2f ms to ask the Dock and look at the windows",
+            press.mainTime * 1000,
+            press.workerTime * 1000
+        ))
         switch press.plan {
         case .nothing:
             return
