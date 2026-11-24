@@ -151,6 +151,22 @@ func post(_ type: CGEventType, at point: CGPoint, count: Int64 = 1) {
     event.post(tap: .cghidEventTap)
 }
 
+/// The last click, for as long as nothing was checked after it: how long the
+/// button was really down, and how to click again. A hand holds it for 80 ms.
+/// A virtual machine that stalls between down and up makes a second of that,
+/// and a press of a second is a long press: the Dock opens the icon's menu,
+/// and Dock Click leaves it alone.
+struct Clicked {
+    let longestPress: TimeInterval
+    let again: () -> Void
+
+    var wasNoClick: Bool {
+        return longestPress > 0.3
+    }
+}
+
+var lastClick: Clicked?
+
 /// One click on the app's Dock icon, the way a hand does it: the pointer
 /// arrives and rests, the button goes down and comes up. A tap on a trackpad
 /// is the same with `held` at a few milliseconds.
@@ -160,12 +176,10 @@ func click(_ app: NSRunningApplication, held: TimeInterval = 0.08) {
     }
     post(.mouseMoved, at: spot)
     pause(0.3)
-    post(.leftMouseDown, at: spot)
-    usleep(useconds_t(held * 1_000_000))
-    post(.leftMouseUp, at: spot)
+    let took = press(at: spot, held: held)
+    lastClick = Clicked(longestPress: took, again: { click(app, held: held) })
 }
 
-/// Two clicks in a row, the second `gap` seconds after the first.
 /// Two clicks in a row, the second `gap` seconds after the first. The
 /// second one looks for the icon again: while windows go into the Dock, the
 /// Dock makes room for them and its icons move.
@@ -175,22 +189,23 @@ func doubleClick(_ app: NSRunningApplication, gap: TimeInterval) {
     }
     post(.mouseMoved, at: spot)
     pause(0.3)
+    var longest: TimeInterval = 0
     for count: Int64 in [1, 2] {
-        post(.leftMouseDown, at: spot, count: count)
-        usleep(50_000)
-        post(.leftMouseUp, at: spot, count: count)
+        longest = max(longest, press(at: spot, held: 0.05, count: count))
         if count == 1 {
             usleep(useconds_t(gap * 1_000_000))
             spot = icon(of: app)?.centre ?? spot
         }
     }
+    lastClick = Clicked(longestPress: longest, again: { doubleClick(app, gap: gap) })
 }
 
 /// A click at a point, on whatever is there.
 func click(at spot: CGPoint) {
     post(.mouseMoved, at: spot)
     pause(0.3)
-    press(at: spot)
+    let took = press(at: spot)
+    lastClick = Clicked(longestPress: took, again: { click(at: spot) })
 }
 
 /// A spot in the title bar of the app's front window: a click there goes to
@@ -259,10 +274,14 @@ func pressEscape() {
     pause(1)
 }
 
-func press(at spot: CGPoint) {
-    post(.leftMouseDown, at: spot)
-    usleep(60_000)
-    post(.leftMouseUp, at: spot)
+/// Button down and up. Returns how long that really took.
+@discardableResult
+func press(at spot: CGPoint, held: TimeInterval = 0.06, count: Int64 = 1) -> TimeInterval {
+    let began = ProcessInfo.processInfo.systemUptime
+    post(.leftMouseDown, at: spot, count: count)
+    usleep(useconds_t(held * 1_000_000))
+    post(.leftMouseUp, at: spot, count: count)
+    return ProcessInfo.processInfo.systemUptime - began
 }
 
 // MARK: - SuperSurfer's menu
@@ -400,7 +419,21 @@ func expect(
     within timeout: TimeInterval = 6,
     _ condition: () -> Bool
 ) {
-    guard waitUntil(timeout, condition) else {
+    var arrived = waitUntil(timeout, condition)
+    // Repeated is only a press that was no click. A click that did not do
+    // what it should is what this test is there to find.
+    var repeats = 0
+    while !arrived, repeats < 2, let last = lastClick, last.wasNoClick {
+        repeats += 1
+        say("      " + notAClick(last) + ": once more")
+        lastClick = nil
+        // Such a press may have opened the icon's menu.
+        pressEscape()
+        last.again()
+        arrived = waitUntil(timeout, condition)
+    }
+    lastClick = nil
+    guard arrived else {
         say("FAIL  \(what)")
         say("      \(state(of: app))")
         exit(1)
@@ -410,6 +443,12 @@ func expect(
 
 /// The condition must hold now and keep holding: for what must not happen.
 func stays(_ what: String, of app: NSRunningApplication, for duration: TimeInterval, _ condition: () -> Bool) {
+    if let last = lastClick, last.wasNoClick {
+        // Not repeated: for some of these checks it matters when the click
+        // came.
+        say("      " + notAClick(last) + ", so this says less than it should")
+    }
+    lastClick = nil
     let end = Date().addingTimeInterval(duration)
     while Date() < end {
         guard condition() else {
@@ -420,6 +459,10 @@ func stays(_ what: String, of app: NSRunningApplication, for duration: TimeInter
         pause(0.1)
     }
     say("ok    \(what)")
+}
+
+func notAClick(_ click: Clicked) -> String {
+    return String(format: "this machine held the button down for %.2f s, which is no click", click.longestPress)
 }
 
 // MARK: - Apps to click on
