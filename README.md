@@ -182,7 +182,7 @@ Like Dock Click this has nothing to do with routing links, and none of it runs u
 **What stays different from Windows.**
 
 - A shortcut is an icon of its own. While the browser runs, the browser's icon is in the Dock as well, and the dot for a running app is under that one.
-- The click first starts the small app. On GitHub's macOS runners that took 0.1 to 0.2 s, and two to three seconds the first time a new shortcut was used. SuperSurfer then needed another 0.01 to 0.13 s, most of it waiting for the browser.
+- The click first starts the small app. On GitHub's macOS runners that took 0.1 to 0.2 s, and two to three seconds the first time a new shortcut was used. SuperSurfer then needed another 0.01 to 0.3 s, most of it waiting for the browser.
 - A shortcut remembers the folder the browser keeps the profile in, so renaming the profile does not break it. Its own name and badge stay as they were: remove it and make it again for new ones.
 - **Remove Shortcut** deletes the app. The Dock keeps a question mark in its place until you drag that out.
 
