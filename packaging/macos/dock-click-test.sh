@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # End-to-end test for Dock Click against a built SuperSurfer.app.
 #
-# It opens Calculator and TextEdit, clicks their Dock icons with mouse events
-# and checks that the app in front is hidden or minimized, that the next click
-# brings it back, and that an app which only comes to the front with the click
-# is left alone. The pointer moves and windows come and go while it runs, so
-# keep your hands off the Mac for a minute.
+# It opens Calculator, TextEdit, Safari and a Finder window, clicks their Dock
+# icons with mouse events and checks that the app in front is hidden or
+# minimized, that the next click brings it back, and that an app which only
+# comes to the front with the click is left alone. The pointer moves and
+# windows come and go while it runs, so keep your hands off the Mac for the
+# two minutes it takes.
 #
 # Needs a Mac with a logged-in session in which this shell may use
 # Accessibility. A GitHub-hosted macOS runner qualifies; on your own Mac it is
@@ -26,6 +27,8 @@ SCRATCH="$(mktemp -d)"
 SUPPORT="$SCRATCH/Library/Application Support/SuperSurfer"
 DRIVER="$SCRATCH/dock-click-test"
 PID=""
+# Each part below says for itself what the choice is.
+unset SUPERSURFER_DOCK_CLICK
 
 stop_app() {
   if [ -n "$PID" ]; then
