@@ -69,6 +69,8 @@ enum SelfTest {
 
         check("URL with characters old macOS rejects", Launcher.makeURL("https://example.com/a b|c?q={x}") != nil)
 
+        DockClickController.selfTest(check)
+
         print(failures == 0 ? "self-test passed" : "self-test FAILED (\(failures))")
         return failures == 0 ? 0 : 1
     }

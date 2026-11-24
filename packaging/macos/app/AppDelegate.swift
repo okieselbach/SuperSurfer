@@ -113,6 +113,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         statusMenu = StatusMenuController(app: self)
         warmUp()
+        // Does nothing unless Dock Click was chosen in the menu.
+        DockClickController.shared.refresh()
     }
 
     /// Opening the app again (Finder, Spotlight, `open -a`) shows its menu,

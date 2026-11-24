@@ -163,6 +163,10 @@ jobs:
       - name: Smoke test
         run: bash packaging/macos/smoke-test.sh dist/SuperSurfer.app
 
+      # Clicks real Dock icons and checks what Dock Click makes of them.
+      - name: Dock click test
+        run: bash packaging/macos/dock-click-test.sh dist/SuperSurfer.app
+
       - name: Archive app bundle
         run: ditto -c -k --sequesterRsrc --keepParent dist/SuperSurfer.app dist/SuperSurfer.app.zip
 
