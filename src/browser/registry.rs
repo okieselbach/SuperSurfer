@@ -1491,85 +1491,119 @@ fn discover_chromium_profiles(support_dir: &Path) -> Result<Vec<BrowserProfile>>
         .pointer("/profile/info_cache")
         .and_then(|v| v.as_object())
     {
-        let text = |info: &serde_json::Value, key: &str| {
-            info.get(key)
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string()
-        };
-        // The name of the account a profile is signed in to, as the browser
-        // shows it: the given name where there is one.
-        let account = |info: &serde_json::Value| {
-            let given = text(info, "gaia_given_name");
-            if given.is_empty() {
-                text(info, "gaia_name")
-            } else {
-                given
-            }
-        };
-        for (dir, info) in info_cache {
-            let name = info
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(dir)
-                .to_string();
-            let own_account = account(info);
-            let account_shared = !own_account.is_empty()
-                && info_cache.iter().any(|(other_dir, other)| {
-                    other_dir != dir && account(other).eq_ignore_ascii_case(&own_account)
-                });
-            let made_up_name = info
-                .get("is_using_default_name")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+        let names: Vec<(&String, ChromiumNames)> = info_cache
+            .iter()
+            .map(|(dir, info)| (dir, ChromiumNames::read(dir, info)))
+            .collect();
+        for (index, (dir, own)) in names.iter().enumerate() {
+            let others = names
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(_, (_, names))| names);
             profiles.push(BrowserProfile {
-                menu_titles: chromium_menu_titles(
-                    &name,
-                    &own_account,
-                    made_up_name,
-                    account_shared,
-                ),
-                name,
-                directory: Some(dir.clone()),
+                name: own.name.clone(),
+                directory: Some((*dir).clone()),
                 path: None,
+                menu_titles: chromium_menu_titles(own, others),
             });
         }
     }
     Ok(profiles)
 }
 
+/// What Chromium keeps about the names of a profile in `Local State`.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+struct ChromiumNames {
+    /// The profile's own name.
+    name: String,
+    /// A name an organization gave the profile. Where there is one, the
+    /// browser shows it in place of `name`.
+    label: String,
+    /// The name of the account the profile is signed in to, the given name
+    /// where there is one. Empty for a profile that is not signed in.
+    account: String,
+    /// `name` is one the browser made up ("Person 1").
+    made_up_name: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+impl ChromiumNames {
+    fn read(directory: &str, info: &serde_json::Value) -> Self {
+        let text = |key: &str| {
+            info.get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let account = ["gaia_given_name", "gaia_name", "oidc_identity_name"]
+            .into_iter()
+            .map(text)
+            .find(|name| !name.is_empty())
+            .unwrap_or_default();
+        ChromiumNames {
+            name: info
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(directory)
+                .to_string(),
+            label: text("enterprise_label"),
+            account,
+            made_up_name: info
+                .get("is_using_default_name")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        }
+    }
+
+    /// The name the browser shows for the profile itself.
+    fn local(&self) -> &str {
+        if self.label.is_empty() {
+            self.name.trim()
+        } else {
+            &self.label
+        }
+    }
+}
+
 /// What a Chromium browser may call a profile in its own profile menu, most
 /// likely first.
 ///
-/// The menu does not always show the profile's name. For a profile that is
-/// signed in, Chromium shows the name of the account instead while the
-/// profile still goes by the name the browser made up for it ("Person 1"),
-/// and both, as "Account (Profile)", once the profile was given a name or two
-/// profiles are signed in under the same account name. The first entry is
-/// what that rule yields; the others are the remaining forms, for a browser
-/// that follows another rule.
+/// The menu does not always show the profile's name. This follows
+/// `ProfileAttributesEntry::GetName` in Chromium's source: a profile that is
+/// not signed in goes by its own name. One that is signed in goes by the name
+/// of its account while its own name is one the browser made up ("Person 1"),
+/// and by both, as "Account (Profile)", once it was given a name, or when
+/// another profile already goes by that account name alone.
+///
+/// The first entry is what that rule yields. The others are the remaining
+/// forms, for a browser that follows another rule.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-fn chromium_menu_titles(
-    name: &str,
-    account: &str,
-    made_up_name: bool,
-    account_shared: bool,
+fn chromium_menu_titles<'a>(
+    own: &ChromiumNames,
+    mut others: impl Iterator<Item = &'a ChromiumNames>,
 ) -> Vec<String> {
-    let name = name.trim();
-    let account = account.trim();
-    let both = format!("{account} ({name})");
-    let candidates: Vec<&str> = if account.is_empty() {
-        vec![name]
-    } else if account.eq_ignore_ascii_case(name) {
-        vec![account, name]
-    } else if !made_up_name || account_shared {
-        vec![&both, name, account]
+    let local = own.local();
+    let account = own.account.as_str();
+    let both = format!("{account} ({local})");
+    let account_taken = !account.is_empty()
+        && others.any(|other| {
+            other.account.eq_ignore_ascii_case(account)
+                && (other.made_up_name || other.local().eq_ignore_ascii_case(&other.account))
+        });
+    let expected: Vec<&str> = if account.is_empty() {
+        vec![local]
+    } else if account.eq_ignore_ascii_case(local) {
+        vec![account, local]
+    } else if !own.made_up_name || !own.label.is_empty() || account_taken {
+        vec![&both, local, account]
     } else {
-        vec![account, &both, name]
+        vec![account, &both, local]
     };
     let mut titles: Vec<String> = Vec::new();
-    for candidate in candidates {
+    // The profile's own name last, for when a label stands in front of it.
+    for candidate in expected.into_iter().chain([own.name.trim()]) {
         if !candidate.is_empty() && !titles.iter().any(|title| title == candidate) {
             titles.push(candidate.to_string());
         }
@@ -1797,32 +1831,71 @@ mod tests {
         assert!(profiles.is_empty() && failure.is_none());
     }
 
+    fn names(name: &str, account: &str, made_up_name: bool) -> ChromiumNames {
+        ChromiumNames {
+            name: name.to_string(),
+            label: String::new(),
+            account: account.to_string(),
+            made_up_name,
+        }
+    }
+
     #[test]
     fn menu_titles_follow_what_chromium_shows_for_a_profile() {
+        let titles = |own: &ChromiumNames, others: &[ChromiumNames]| {
+            chromium_menu_titles(own, others.iter())
+        };
         // Not signed in: the profile's name.
-        assert_eq!(chromium_menu_titles("Work", "", false, false), ["Work"]);
+        assert_eq!(titles(&names("Work", "", false), &[]), ["Work"]);
         // Signed in under a name the browser made up: the account's name.
         assert_eq!(
-            chromium_menu_titles("Person 1", "Ada", true, false),
+            titles(&names("Person 1", "Ada", true), &[]),
             ["Ada", "Ada (Person 1)", "Person 1"]
         );
         // Signed in and named by the user: both.
         assert_eq!(
-            chromium_menu_titles("Work", "Ada", false, false),
+            titles(&names("Work", "Ada", false), &[]),
             ["Ada (Work)", "Work", "Ada"]
         );
-        // Two profiles of one account are told apart by their own names,
-        // made up or not.
+        // Never "Ada (ada)".
+        assert_eq!(titles(&names("ada", "Ada", false), &[]), ["Ada", "ada"]);
+
+        // A second profile of the same account that goes by the account's
+        // name alone: both then show their own names with it.
         assert_eq!(
-            chromium_menu_titles("Person 2", "Ada", true, true),
+            titles(
+                &names("Person 2", "Ada", true),
+                &[names("Person 1", "ada", true)]
+            ),
             ["Ada (Person 2)", "Person 2", "Ada"]
         );
-        // Never "Ada (ada)".
         assert_eq!(
-            chromium_menu_titles("ada", "Ada", false, false),
-            ["Ada", "ada"]
+            titles(
+                &names("Person 2", "Ada", true),
+                &[names("Ada", "Ada", false)]
+            ),
+            ["Ada (Person 2)", "Person 2", "Ada"]
         );
-        assert_eq!(chromium_menu_titles("Ada", "Ada", false, true), ["Ada"]);
+        // A second profile of the account that shows its own name anyway
+        // leaves the account's name to this one.
+        assert_eq!(
+            titles(
+                &names("Person 2", "Ada", true),
+                &[names("Work", "Ada", false), names("Dev", "", false)]
+            ),
+            ["Ada", "Ada (Person 2)", "Person 2"]
+        );
+
+        // A name given by an organization stands in for the profile's own
+        // and is always shown.
+        let mut managed = names("Person 3", "Ada", true);
+        managed.label = "Contoso".to_string();
+        assert_eq!(
+            titles(&managed, &[]),
+            ["Ada (Contoso)", "Contoso", "Ada", "Person 3"]
+        );
+        managed.account = String::new();
+        assert_eq!(titles(&managed, &[]), ["Contoso", "Person 3"]);
     }
 
     #[test]
@@ -1839,7 +1912,9 @@ mod tests {
                              "gaia_name":"Grace Hopper","gaia_given_name":""},
                 "Profile 2":{"name":"Dev"},
                 "Profile 3":{"name":"Person 4","is_using_default_name":true,
-                             "gaia_name":"ADA","gaia_given_name":"ada"}
+                             "gaia_name":"ADA","gaia_given_name":"ada"},
+                "Profile 4":{"name":"Person 5","is_using_default_name":true,
+                             "oidc_identity_name":"Linus","enterprise_label":"Contoso"}
             }}}"#,
         )
         .unwrap();
@@ -1860,6 +1935,14 @@ mod tests {
         assert_eq!(titles[2].1, ["Dev"]);
         assert_eq!(titles[3].0, "Profile 3");
         assert_eq!(titles[3].1, ["ada (Person 4)", "Person 4", "ada"]);
+        // Signed in through an organization, which also named the profile.
+        assert_eq!(titles[4].0, "Profile 4");
+        assert_eq!(
+            titles[4].1,
+            ["Linus (Contoso)", "Contoso", "Linus", "Person 5"]
+        );
+        // The profile's own name stays what the rest of SuperSurfer goes by.
+        assert_eq!(profiles[4].name, "Person 5");
         let _ = std::fs::remove_dir_all(&dir);
 
         // A profile from a cache file that knew no titles yet.
