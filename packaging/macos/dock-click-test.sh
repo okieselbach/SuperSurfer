@@ -13,7 +13,9 @@
 # is skipped.
 #
 # The Dock Click choice reaches the app through the environment and is not
-# stored. Everything else runs against a scratch HOME, as in smoke-test.sh.
+# stored, except in the last part, which makes the choice in the app's menu
+# and puts back what was stored before. Everything else runs against a
+# scratch HOME, as in smoke-test.sh.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -33,8 +35,23 @@ stop_app() {
   fi
 }
 
+STORED_CHOICE=""
+RESTORE_CHOICE=no
+
+restore_choice() {
+  if [ "$RESTORE_CHOICE" = yes ]; then
+    if [ -n "$STORED_CHOICE" ]; then
+      defaults write dev.supersurfer.app dockClick "$STORED_CHOICE"
+    else
+      defaults delete dev.supersurfer.app dockClick 2>/dev/null || true
+    fi
+    RESTORE_CHOICE=no
+  fi
+}
+
 cleanup() {
   stop_app
+  restore_choice
   rm -rf "$SCRATCH"
 }
 trap cleanup EXIT
@@ -117,6 +134,29 @@ for MODE in hide minimize; do
     exit "$STATUS"
   fi
 done
+
+echo "== dock click: chosen in the menu"
+# The way it is really switched on, which goes through the stored choice.
+STORED_CHOICE="$(defaults read dev.supersurfer.app dockClick 2>/dev/null || true)"
+RESTORE_CHOICE=yes
+defaults delete dev.supersurfer.app dockClick 2>/dev/null || true
+TRACE="$SCRATCH/trace-menu.log"
+HOME="$SCRATCH" "$BIN" --resident 2>"$TRACE" &
+PID=$!
+if ! wait_for 30 app_is_running dev.supersurfer.app; then
+  echo "FAIL: the app did not come up" >&2
+  exit 1
+fi
+sleep 1
+STATUS=0
+"$DRIVER" menu || STATUS=$?
+echo "stored: $(defaults read dev.supersurfer.app dockClick 2>/dev/null || echo nothing)"
+stop_app
+restore_choice
+sed 's/^/trace: /' "$TRACE"
+if [ "$STATUS" -ne 0 ]; then
+  exit "$STATUS"
+fi
 
 # TEMPORARY: how much room do the settle time and the click length have?
 echo "== probe: how long a press is still a click"

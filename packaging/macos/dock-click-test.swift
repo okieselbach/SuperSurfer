@@ -9,6 +9,8 @@ import Cocoa
 //   dock-click-test control     SuperSurfer is not running
 //   dock-click-test hide        SuperSurfer runs with Dock Click on "hide"
 //   dock-click-test minimize    SuperSurfer runs with Dock Click on "minimize"
+//   dock-click-test menu        SuperSurfer runs with Dock Click off; the
+//                               test switches it on and off in the menu
 
 func say(_ text: String) {
     print(text)
@@ -60,23 +62,30 @@ func elements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
     return (value(element, attribute) as? [AXUIElement]) ?? []
 }
 
+/// The middle of an element on screen, where a click on it goes. Nil while
+/// the element has no size, which is how a menu entry looks that is not shown.
+func middle(of element: AXUIElement) -> CGPoint? {
+    guard let position = value(element, kAXPositionAttribute),
+          let size = value(element, kAXSizeAttribute) else {
+        return nil
+    }
+    var origin = CGPoint.zero
+    var extent = CGSize.zero
+    guard AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+          AXValueGetValue(size as! AXValue, .cgSize, &extent),
+          extent.width > 0, extent.height > 0 else {
+        return nil
+    }
+    return CGPoint(x: origin.x + extent.width / 2, y: origin.y + extent.height / 2)
+}
+
 struct Icon {
     let title: String
     let url: URL?
     let element: AXUIElement
 
     var centre: CGPoint? {
-        guard let position = value(element, kAXPositionAttribute),
-              let size = value(element, kAXSizeAttribute) else {
-            return nil
-        }
-        var origin = CGPoint.zero
-        var extent = CGSize.zero
-        guard AXValueGetValue(position as! AXValue, .cgPoint, &origin),
-              AXValueGetValue(size as! AXValue, .cgSize, &extent) else {
-            return nil
-        }
-        return CGPoint(x: origin.x + extent.width / 2, y: origin.y + extent.height / 2)
+        return middle(of: element)
     }
 }
 
@@ -163,6 +172,93 @@ func doubleClick(_ app: NSRunningApplication, gap: TimeInterval) {
             usleep(useconds_t(gap * 1_000_000))
         }
     }
+}
+
+func press(at spot: CGPoint) {
+    post(.leftMouseDown, at: spot)
+    usleep(60_000)
+    post(.leftMouseUp, at: spot)
+}
+
+// MARK: - SuperSurfer's menu
+
+func superSurfer() -> AXUIElement {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.supersurfer.app").first else {
+        stop("SuperSurfer is not running")
+    }
+    return AXUIElementCreateApplication(app.processIdentifier)
+}
+
+/// SuperSurfer's icon in the menu bar.
+func statusItem() -> AXUIElement? {
+    guard let bar = value(superSurfer(), "AXExtrasMenuBar") else {
+        return nil
+    }
+    return elements(bar as! AXUIElement, kAXChildrenAttribute).first
+}
+
+/// The entries of the menu under that icon, as they were built when it last
+/// opened. The menu is rebuilt on every opening, so nothing here is kept.
+func statusMenuEntries() -> [AXUIElement] {
+    guard let item = statusItem() else {
+        return []
+    }
+    return elements(item, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) }
+}
+
+func dockClickEntry() -> AXUIElement? {
+    return statusMenuEntries().first { (text($0, kAXTitleAttribute) ?? "").contains("Dock") }
+}
+
+/// Opens the menu with a click on the icon and the Dock Click submenu with a
+/// click on its entry, then clicks the choice with one of the given titles
+/// (English or German). Returns the title the Dock Click entry had.
+func chooseDockClick(_ wanted: [String]) -> String {
+    guard let item = statusItem(), let icon = middle(of: item) else {
+        stop("SuperSurfer has no icon in the menu bar")
+    }
+    post(.mouseMoved, at: icon)
+    pause(0.3)
+    press(at: icon)
+    pause(0.8)
+
+    var found: CGPoint?
+    guard waitUntil(6, {
+        found = dockClickEntry().flatMap(middle)
+        return found != nil
+    }), let row = found else {
+        let entries = statusMenuEntries().map { text($0, kAXTitleAttribute) ?? "" }
+        stop("SuperSurfer's menu did not open, or has no Dock Click entry: \(entries)")
+    }
+    let title = dockClickEntry().flatMap { text($0, kAXTitleAttribute) } ?? ""
+
+    // A click on an entry with a submenu opens the submenu and keeps the
+    // menu up.
+    post(.mouseMoved, at: row)
+    pause(0.3)
+    press(at: row)
+    pause(0.8)
+
+    var target: CGPoint?
+    var offered: [String] = []
+    guard waitUntil(6, {
+        let choices = dockClickEntry()
+            .map { elements($0, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) } } ?? []
+        offered = choices.map { text($0, kAXTitleAttribute) ?? "" }
+        target = choices.first { wanted.contains(text($0, kAXTitleAttribute) ?? "") }.flatMap(middle)
+        return target != nil
+    }), let spot = target else {
+        stop("no choice \(wanted) under \(title): \(offered)")
+    }
+    // Sideways first, then up or down, so the pointer never crosses another
+    // entry of the main menu on its way.
+    post(.mouseMoved, at: CGPoint(x: spot.x, y: row.y))
+    pause(0.3)
+    post(.mouseMoved, at: spot)
+    pause(0.3)
+    press(at: spot)
+    pause(1)
+    return title
 }
 
 // MARK: - What can be seen of an app
@@ -405,6 +501,34 @@ func testHide() {
     calculator.terminate()
 }
 
+/// Dock Click the way it is really switched on: in the menu. The app was
+/// started without a choice in its environment, so this also goes through
+/// what is stored.
+func testMenu() {
+    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+
+    say("-- off: a click on the icon of the app in front changes nothing")
+    click(calculator)
+    stays("Calculator is there", of: calculator, for: 2) {
+        windowsOnScreen(calculator) > 0 && isInFront(calculator)
+    }
+
+    say("-- choosing Hide App in the menu")
+    say("      the menu said: \(chooseDockClick(["Hide App", "App ausblenden"]))")
+    _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    hideAndBack(calculator)
+
+    say("-- choosing Off in the menu")
+    say("      the menu said: \(chooseDockClick(["Off", "Aus"]))")
+    _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    click(calculator)
+    stays("Calculator is there", of: calculator, for: 2) {
+        windowsOnScreen(calculator) > 0 && isInFront(calculator)
+    }
+
+    calculator.terminate()
+}
+
 func testMinimize() {
     let folder = FileManager.default.temporaryDirectory
         .appendingPathComponent("supersurfer-dock-click-\(ProcessInfo.processInfo.processIdentifier)")
@@ -590,8 +714,10 @@ case "hide":
     testHide()
 case "minimize":
     testMinimize()
+case "menu":
+    testMenu()
 default:
-    say("usage: dock-click-test preflight | control | hide | minimize")
+    say("usage: dock-click-test preflight | control | hide | minimize | menu")
     exit(2)
 }
 say("passed")
