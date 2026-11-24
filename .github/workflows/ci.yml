@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish a GitHub release for the version in Cargo.toml"
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -169,7 +174,11 @@ jobs:
 
   release:
     name: GitHub Release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # Three ways to get here: a pushed tag, a release created on github.com
+    # (which pushes its tag), or a manual run on main with "release" ticked.
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main')
     needs: [check, build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     permissions:
@@ -185,7 +194,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+            tag="v${version}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
           notes="$(mktemp)"
           cat >"$notes" <<EOF
           SuperSurfer ${tag} binaries for Windows, macOS, and Linux.
@@ -207,11 +221,34 @@ jobs:
 
           See the [manual](https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/docs/manual.md).
           EOF
-          gh release create "$tag" \
-            artifacts/supersurfer-windows/supersurfer.exe \
-            artifacts/supersurfer-macos/SuperSurfer.app.zip \
-            artifacts/supersurfer-linux/supersurfer-linux-x86_64.tar.gz \
-            artifacts/supersurfer-linux/supersurfer-linux-aarch64.tar.gz \
-            --title "SuperSurfer ${tag}" \
-            --notes-file "$notes" \
-            --verify-tag
+          assets=(
+            artifacts/supersurfer-windows/supersurfer.exe
+            artifacts/supersurfer-macos/SuperSurfer.app.zip
+            artifacts/supersurfer-linux/supersurfer-linux-x86_64.tar.gz
+            artifacts/supersurfer-linux/supersurfer-linux-aarch64.tar.gz
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+              # These binaries come from whatever main is now, not from the
+              # commit the existing release was tagged at.
+              echo "::error::${tag} is already released. Bump the version before publishing again."
+              exit 1
+            fi
+            # The release was created on github.com, which made the tag that
+            # started this run. Add the binaries, and the notes if it has none.
+            gh release upload "$tag" "${assets[@]}" --clobber
+            if [ -z "$(gh release view "$tag" --json body --jq '.body')" ]; then
+              gh release edit "$tag" --notes-file "$notes"
+            fi
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            # No tag yet: create it at the commit these binaries were built from.
+            gh release create "$tag" "${assets[@]}" \
+              --target "${GITHUB_SHA}" \
+              --title "SuperSurfer ${tag}" \
+              --notes-file "$notes"
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --title "SuperSurfer ${tag}" \
+              --notes-file "$notes" \
+              --verify-tag
+          fi
