@@ -158,8 +158,11 @@ func click(_ app: NSRunningApplication, held: TimeInterval = 0.08) {
 }
 
 /// Two clicks in a row, the second `gap` seconds after the first.
+/// Two clicks in a row, the second `gap` seconds after the first. The
+/// second one looks for the icon again: while windows go into the Dock, the
+/// Dock makes room for them and its icons move.
 func doubleClick(_ app: NSRunningApplication, gap: TimeInterval) {
-    guard let spot = icon(of: app)?.centre else {
+    guard var spot = icon(of: app)?.centre else {
         stop("no Dock icon found for \(name(app))")
     }
     post(.mouseMoved, at: spot)
@@ -170,8 +173,81 @@ func doubleClick(_ app: NSRunningApplication, gap: TimeInterval) {
         post(.leftMouseUp, at: spot, count: count)
         if count == 1 {
             usleep(useconds_t(gap * 1_000_000))
+            spot = icon(of: app)?.centre ?? spot
         }
     }
+}
+
+/// A click at a point, on whatever is there.
+func click(at spot: CGPoint) {
+    post(.mouseMoved, at: spot)
+    pause(0.3)
+    press(at: spot)
+}
+
+/// A spot in the title bar of the app's front window: a click there goes to
+/// the app and does nothing.
+func titleBar(of app: NSRunningApplication) -> CGPoint? {
+    let element = AXUIElementCreateApplication(app.processIdentifier)
+    guard let window = elements(element, kAXWindowsAttribute).first,
+          let position = value(window, kAXPositionAttribute),
+          let size = value(window, kAXSizeAttribute) else {
+        return nil
+    }
+    var origin = CGPoint.zero
+    var extent = CGSize.zero
+    guard AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+          AXValueGetValue(size as! AXValue, .cgSize, &extent) else {
+        return nil
+    }
+    return CGPoint(x: origin.x + extent.width / 2, y: origin.y + 12)
+}
+
+/// Puts a small window of this program over the app's Dock icon, the way a
+/// menu or a notification can lie over it. Clicks there go to that window and
+/// never reach the Dock. It does not take the front from the app.
+func cover(_ app: NSRunningApplication) -> (panel: NSPanel, spot: CGPoint) {
+    guard let spot = icon(of: app)?.centre, let primary = NSScreen.screens.first else {
+        stop("no Dock icon found for \(name(app))")
+    }
+    _ = NSApplication.shared
+    let side: CGFloat = 60
+    // Accessibility counts from the top of the main display, AppKit from its
+    // bottom.
+    let frame = NSRect(
+        x: spot.x - side / 2,
+        y: primary.frame.height - spot.y - side / 2,
+        width: side,
+        height: side
+    )
+    let panel = NSPanel(
+        contentRect: frame,
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false
+    )
+    panel.level = .popUpMenu
+    panel.backgroundColor = .systemOrange
+    panel.isOpaque = true
+    panel.hidesOnDeactivate = false
+    panel.orderFrontRegardless()
+    panel.display()
+    pause(0.5)
+    return (panel, spot)
+}
+
+/// Mission Control ("") or App Exposé ("2"), the way the keyboard opens them.
+func openMissionControl(_ argument: String) {
+    let tool = "/System/Applications/Mission Control.app/Contents/MacOS/Mission Control"
+    run(tool, argument.isEmpty ? [] : [argument])
+    pause(2)
+}
+
+func pressEscape() {
+    for keyDown in [true, false] {
+        CGEvent(keyboardEventSource: mouse, virtualKey: 53, keyDown: keyDown)?.post(tap: .cghidEventTap)
+    }
+    pause(1)
 }
 
 func press(at spot: CGPoint) {
@@ -404,7 +480,9 @@ func preflight() -> Never {
     guard result == .success, subrole == "AXApplicationDockItem" else {
         stop("asked what is at the \(first.title) icon, the Dock answers \(subrole) (error \(result.rawValue))")
     }
-    say("the Dock shows \(icons.count) app icons and answers for the one at \(Int(spot.x)),\(Int(spot.y))")
+    let running = (value(first.element, "AXIsApplicationRunning") as? Bool).map { "\($0)" } ?? "not said"
+    say("the Dock shows \(icons.count) app icons and answers for the one at \(Int(spot.x)),\(Int(spot.y))"
+        + " (\(first.title), running: \(running))")
     exit(0)
 }
 
@@ -510,6 +588,52 @@ func testHide() {
         stays("Calculator is there", of: calculator, for: 2) {
             windowsOnScreen(calculator) > 0 && isInFront(calculator)
         }
+    }
+
+    say("-- clicks that do not go to the Dock are not looked at")
+    _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    if let bar = titleBar(of: calculator) {
+        for _ in 1...4 {
+            click(at: bar)
+            pause(0.7)
+        }
+    }
+    stays("Calculator is there", of: calculator, for: 1) {
+        windowsOnScreen(calculator) > 0 && isInFront(calculator)
+    }
+
+    say("-- a window lying over the icon gets the click, and the app stays")
+    let lid = cover(calculator)
+    click(at: lid.spot)
+    stays("Calculator is there", of: calculator, for: 2.5) {
+        windowsOnScreen(calculator) > 0 && isInFront(calculator)
+    }
+    lid.panel.orderOut(nil)
+    pause(1)
+    say("-- with that window gone the same click hides it again")
+    hideAndBack(calculator)
+
+    say("-- a second click soon after switching to an app is left alone")
+    finderToFront()
+    click(calculator)
+    expect("Calculator comes to the front", of: calculator) {
+        isInFront(calculator)
+    }
+    click(calculator)
+    stays("and is not hidden by the second click", of: calculator, for: 2.5) {
+        windowsOnScreen(calculator) > 0 && isInFront(calculator)
+    }
+
+    for (label, argument) in [("Mission Control", ""), ("App Exposé", "2")] {
+        say("-- in \(label) a click on the icon is a way back to the app")
+        _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+        openMissionControl(argument)
+        click(calculator)
+        pause(1.5)
+        stays("Calculator is there", of: calculator, for: 2.5) {
+            windowsOnScreen(calculator) > 0 && !calculator.isHidden
+        }
+        pressEscape()
     }
 
     say("-- Safari: its Dock icon and the running app need not name the same path")
@@ -622,6 +746,34 @@ func testMinimize() {
         isInFront(textEdit)
     }
     stays("and keeps its windows", of: textEdit, for: 2.5) {
+        windowsOnScreen(textEdit) >= 2 && minimizedWindows(textEdit) == 0
+    }
+
+    say("-- a window brought back by hand: the other one stays where the user left it")
+    click(textEdit)
+    expect("both windows are minimized", of: textEdit, within: 10) {
+        windowsOnScreen(textEdit) == 0 && minimizedWindows(textEdit) == 2
+    }
+    let minimized = elements(AXUIElementCreateApplication(textEdit.processIdentifier), kAXWindowsAttribute)
+        .filter { (value($0, kAXMinimizedAttribute) as? Bool) == true }
+    if let first = minimized.first {
+        AXUIElementSetAttributeValue(first, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+    }
+    expect("one is back by hand", of: textEdit, within: 10) {
+        windowsOnScreen(textEdit) == 1 && minimizedWindows(textEdit) == 1
+    }
+    finderToFront()
+    click(textEdit)
+    expect("TextEdit comes to the front", of: textEdit) {
+        isInFront(textEdit)
+    }
+    stays("and the other window stays minimized", of: textEdit, for: 2.5) {
+        minimizedWindows(textEdit) == 1
+    }
+    for window in elements(AXUIElementCreateApplication(textEdit.processIdentifier), kAXWindowsAttribute) {
+        AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+    }
+    expect("both windows are there again", of: textEdit, within: 10) {
         windowsOnScreen(textEdit) >= 2 && minimizedWindows(textEdit) == 0
     }
 

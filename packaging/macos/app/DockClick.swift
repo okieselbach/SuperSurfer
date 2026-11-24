@@ -3,21 +3,25 @@ import Cocoa
 
 // Dock Click: a click on the Dock icon of the app that is already in front
 // hides that app or minimizes its windows, and the next click on the icon
-// brings it back. macOS itself does nothing for such a click.
+// brings it back. macOS itself leaves such a click without effect, unless
+// Mission Control is up or the app has windows on another Space.
 //
 // None of this has to do with routing links. It lives here because the app is
 // loaded anyway, and it is off until chosen in the menu: until then there is
 // no event monitor, no observer and no need for the Accessibility permission.
 //
-// A click is handled in two places:
+// A click is handled in three places:
 //
 //   main thread   A global event monitor sees the button go down and come up.
-//                 It only listens; the Dock gets every click as before. Each
-//                 event costs a few microseconds here.
-//   worker queue  Asks the Dock, through Accessibility, which icon is under
-//                 the pointer, and minimizes or restores windows. Another app
-//                 may take its time over such a request, so none of it runs
-//                 on the main thread or on the queue that routes links.
+//                 It only listens; the Dock gets every click as before. It
+//                 asks the window server which window is under the pointer,
+//                 and that is all for a click that did not go to the Dock.
+//   Dock queue    Asks the Dock, through Accessibility, which icon is under
+//                 the pointer. Nothing slow ever runs here, so the answer is
+//                 about the Dock as it was when the button went down.
+//   worker queue  Asks the app about its windows, and minimizes or restores
+//                 them. An app may take its time over that, so none of it
+//                 runs on the main thread or on the queue that routes links.
 
 /// What a click on the Dock icon of the app in front does.
 enum DockClick: String, CaseIterable {
@@ -60,18 +64,24 @@ enum DockClick: String, CaseIterable {
 /// The decisions that need neither the Dock nor another app, so that
 /// `--self-test` can check them.
 enum DockClickRules {
-    /// A press held this long opens the Dock's menu for the icon instead.
+    /// A press held longer than this is not a click. The Dock opens the menu
+    /// of the icon after 0.45 to 0.55 s, measured on macOS 15.
     static let longestClick: TimeInterval = 0.4
     /// Pointer travel, in points, up to which a press is still a click and
     /// not the start of dragging the icon.
     static let slop: CGFloat = 4
-    /// An event that is handled this long after it happened says nothing
-    /// reliable about the moment it happened, and is left alone.
+    /// A button going down that is noticed this long after it happened says
+    /// nothing reliable about which app was in front at that moment, and is
+    /// left alone.
     static let staleAfter: TimeInterval = 0.25
     /// Nothing is put away later than this after the button went down. With
     /// a Dock or an app that is slow to answer, an app vanishing seconds
     /// after the click would be worse than a click that did nothing.
     static let tooLate: TimeInterval = 1
+    /// How long an app must have been in front before a click on its icon
+    /// puts it away. Somebody who switches to an app and clicks its icon once
+    /// more because it is slow to appear wants to see it, not lose it.
+    static let shortestTimeInFront: TimeInterval = 0.75
 
     /// Both times are seconds since startup: `NSEvent.timestamp` and
     /// `ProcessInfo.systemUptime`.
@@ -104,7 +114,7 @@ enum DockClickRules {
     /// click itself can only have been noticed after the click began, however
     /// late either piece of news arrives here.
     static func wasInFront(since frontSince: TimeInterval, before click: TimeInterval) -> Bool {
-        return frontSince < click
+        return frontSince < click - shortestTimeInFront
     }
 
     static func samePlace(_ one: URL, _ other: URL) -> Bool {
@@ -113,28 +123,40 @@ enum DockClickRules {
     }
 }
 
-/// One press of the mouse button, from going down to what is done about it.
+/// One press of the mouse button on a window of the Dock, from going down to
+/// what is done about it.
 private final class Press {
     let time: TimeInterval
     /// Where the button went down, in the coordinates Accessibility uses:
     /// points from the top left corner of the main display.
     let point: CGPoint
     let mode: DockClick
-    /// The app that was in front before the press began, if any.
+    let dockPID: pid_t
+    /// The app that had been in front for a while when the press began.
     let front: NSRunningApplication?
+
+    // Set on the Dock queue, read on the worker queue after the hand-over.
+    /// The app icon under the pointer, if there was one.
+    var icon: DockIcon?
+    /// The windows `front` had on screen when the button went down.
+    var windowsAtPress: Set<CGWindowID> = []
+    /// Mission Control or App Exposé was up already.
+    var exposeAtPress = false
+
     /// Set and read on the worker queue only.
     var plan = Plan.nothing
     /// Main thread only: a second click followed before anything was done.
     var cancelled = false
-    /// What the click cost on the main thread and, before anything was done
-    /// about it, on the worker queue. Only read for the `--resident` trace.
+    /// What the click cost on the main thread and on the Dock queue. Only
+    /// read for the `--resident` trace.
     var mainTime: TimeInterval = 0
-    var workerTime: TimeInterval = 0
+    var dockTime: TimeInterval = 0
 
-    init(time: TimeInterval, point: CGPoint, mode: DockClick, front: NSRunningApplication?) {
+    init(time: TimeInterval, point: CGPoint, mode: DockClick, dockPID: pid_t, front: NSRunningApplication?) {
         self.time = time
         self.point = point
         self.mode = mode
+        self.dockPID = dockPID
         self.front = front
     }
 }
@@ -146,8 +168,8 @@ private enum Plan {
     case restore(pid_t)
 }
 
-/// Windows this app minimized, front to back, so that the next click on the
-/// icon brings back all of them. macOS by itself brings back one.
+/// Windows this app minimized, so that the next click on the icon brings back
+/// all of them. macOS by itself brings back one.
 private struct Stowed {
     let app: NSRunningApplication
     var windows: [AXUIElement]
@@ -156,9 +178,18 @@ private struct Stowed {
 private struct DockIcon {
     let title: String
     let url: URL
+    /// Whether the Dock shows the app as running.
+    let isRunning: Bool
 
     func belongs(to app: NSRunningApplication) -> Bool {
-        guard let bundle = app.bundleURL else {
+        // An icon that is not running is a second copy of the app at best.
+        guard isRunning, let bundle = app.bundleURL else {
+            return false
+        }
+        // Two running copies have two icons, and nothing here says which
+        // icon is whose.
+        if let identifier = app.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: identifier).count > 1 {
             return false
         }
         if DockClickRules.samePlace(url, bundle) {
@@ -203,13 +234,14 @@ private enum AX {
 final class DockClickController {
     static let shared = DockClickController()
 
-    /// How long the Dock gets, after the button comes up, to finish its own
-    /// handling of the click. That is when the Dock activates the app, and
-    /// activating an app brings it straight back if it was hidden a moment
-    /// too early.
+    /// How long after the button comes up a click is carried out. It is the
+    /// time the second click of a double click has to call the first one off,
+    /// and room for the Dock to deal with the click first. Measured on macOS
+    /// 15, hiding and minimizing held in 56 of 56 clicks even with no wait at
+    /// all, so the Dock is not what needs it.
     private static let settleTime: TimeInterval = 0.12
-    /// The Dock answers in well under a millisecond. Nothing waits longer
-    /// than this for it, or for an app that is asked about its windows.
+    /// The Dock answers within milliseconds. Nothing waits longer than this
+    /// for it, or for an app that is asked about its windows.
     private static let answerTimeout: Float = 0.4
     /// Minimizing is animated, and an app may answer only once the animation
     /// has run.
@@ -220,16 +252,25 @@ final class DockClickController {
     /// Whether the monitor was installed with the permission already given.
     private var monitorHasPermission = false
     private var activationObserver: NSObjectProtocol?
+    private var spaceObserver: NSObjectProtocol?
     private var frontPID: pid_t = 0
     private var frontSince: TimeInterval = 0
+    private var spaceChangedAt: TimeInterval = 0
+    private var dockApp: NSRunningApplication?
+    /// Windows already known to be the Dock's, and windows known not to be.
+    private var dockWindows: Set<Int> = []
+    private var otherWindows: Set<Int> = []
     /// The press whose button is down right now.
     private var press: Press?
     /// The last complete click, which may still be waiting out `settleTime`.
     private var lastClick: Press?
+    private var clicksElsewhere = 0
 
-    // Worker queue only.
-    private let worker = DispatchQueue(label: "dev.supersurfer.dock-click", qos: .userInitiated)
-    private var dock: (app: NSRunningApplication, element: AXUIElement)?
+    /// Questions to the Dock. Nothing slow is ever put on this queue.
+    private let dockQueue = DispatchQueue(label: "dev.supersurfer.dock-click.dock", qos: .userInitiated)
+    /// Questions to apps about their windows, and minimizing them.
+    private let worker = DispatchQueue(label: "dev.supersurfer.dock-click.windows", qos: .userInitiated)
+    /// Worker queue only.
     private var stowed: [pid_t: Stowed] = [:]
 
     private init() {}
@@ -245,10 +286,13 @@ final class DockClickController {
                 NSEvent.removeMonitor(installed)
             }
             monitor = nil
-            if let observer = activationObserver {
-                NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            for observer in [activationObserver, spaceObserver] {
+                if let observer = observer {
+                    NSWorkspace.shared.notificationCenter.removeObserver(observer)
+                }
             }
             activationObserver = nil
+            spaceObserver = nil
             monitorHasPermission = false
             press = nil
             lastClick = nil
@@ -260,7 +304,8 @@ final class DockClickController {
             // timeout can be set for all of it.
             AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), DockClickController.answerTimeout)
             noteFront(NSWorkspace.shared.frontmostApplication)
-            activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            let center = NSWorkspace.shared.notificationCenter
+            activationObserver = center.addObserver(
                 forName: NSWorkspace.didActivateApplicationNotification,
                 object: nil,
                 queue: .main
@@ -274,6 +319,13 @@ final class DockClickController {
                 if !self.monitorHasPermission {
                     self.refresh()
                 }
+            }
+            spaceObserver = center.addObserver(
+                forName: NSWorkspace.activeSpaceDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.spaceChangedAt = ProcessInfo.processInfo.systemUptime
             }
         }
 
@@ -300,11 +352,14 @@ final class DockClickController {
     }
 
     private func choose(_ mode: DockClick) {
-        DockClick.current = mode
-        // What was minimized under the old choice is the user's to bring back.
-        worker.async {
-            self.stowed.removeAll()
+        if mode != DockClick.current {
+            // What was minimized under the old choice is the user's to bring
+            // back.
+            worker.async {
+                self.stowed.removeAll()
+            }
         }
+        DockClick.current = mode
         refresh()
         if mode != .off && !AXIsProcessTrusted() {
             // The system's own request. It puts SuperSurfer on the list under
@@ -371,7 +426,8 @@ final class DockClickController {
         frontSince = ProcessInfo.processInfo.systemUptime
     }
 
-    /// The app in front, provided it already was when the click began.
+    /// The app in front, provided it had been there for a while when the
+    /// click began.
     private func appInFront(before click: TimeInterval) -> NSRunningApplication? {
         guard let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
@@ -384,6 +440,53 @@ final class DockClickController {
             return nil
         }
         return DockClickRules.wasInFront(since: frontSince, before: click) ? app : nil
+    }
+
+    /// The Dock's process ID if the click went to a window of the Dock. The
+    /// Dock itself could not tell: asked what is at a point, it answers for
+    /// its icons whatever lies over them, and a menu or a notification over
+    /// an icon gets the click instead of the icon. The window server knows,
+    /// and writes the window it chose into the event.
+    private func dockPID(clicked event: NSEvent, at point: CGPoint) -> pid_t? {
+        var number = 0
+        if let click = event.cgEvent {
+            number = Int(click.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent))
+        }
+        if number <= 0, let primary = NSScreen.screens.first {
+            // Not in the event: ask now, by the rules for a real click.
+            // AppKit counts from the bottom of the main display, events from
+            // its top.
+            let spot = NSPoint(x: point.x, y: primary.frame.height - point.y)
+            number = NSWindow.windowNumber(at: spot, belowWindowWithWindowNumber: 0)
+        }
+        guard number > 0, !otherWindows.contains(number) else {
+            return nil
+        }
+        if dockApp?.isTerminated != false {
+            dockApp = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
+            dockWindows.removeAll()
+        }
+        guard let dock = dockApp?.processIdentifier else {
+            return nil
+        }
+        if dockWindows.contains(number) {
+            return dock
+        }
+        // Whose window it is has to be asked once per window. Window numbers
+        // are not handed out twice, so the answer can be kept.
+        guard let found = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(number)) as? [[String: Any]],
+              let owner = (found.first?[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value else {
+            return nil
+        }
+        if owner == dock {
+            dockWindows.insert(number)
+            return dock
+        }
+        if otherWindows.count >= 256 {
+            otherWindows.removeAll()
+        }
+        otherWindows.insert(number)
+        return nil
     }
 
     private func handle(_ event: NSEvent) {
@@ -414,15 +517,27 @@ final class DockClickController {
                   let point = event.cgEvent?.location else {
                 return
             }
+            // Nearly every click ends here.
+            guard let dockPID = dockPID(clicked: event, at: point) else {
+                clicksElsewhere += 1
+                if clicksElsewhere == 3 {
+                    DockClickController.trace(String(
+                        format: "a click that is not on the Dock costs %.3f ms on the main thread",
+                        (ProcessInfo.processInfo.systemUptime - now) * 1000
+                    ))
+                }
+                return
+            }
             let started = Press(
                 time: event.timestamp,
                 point: point,
                 mode: mode,
+                dockPID: dockPID,
                 front: repeated ? nil : appInFront(before: event.timestamp)
             )
             press = started
-            worker.async {
-                self.prepare(started)
+            dockQueue.async {
+                self.identify(started)
             }
             started.mainTime = ProcessInfo.processInfo.systemUptime - now
 
@@ -431,8 +546,12 @@ final class DockClickController {
                 return
             }
             press = nil
-            guard fresh, let point = event.cgEvent?.location,
+            guard let point = event.cgEvent?.location,
                   DockClickRules.isClick(from: ended.point, at: ended.time, to: point, at: event.timestamp) else {
+                DockClickController.trace(String(
+                    format: "a press of %.2f s on the Dock was not a click",
+                    event.timestamp - ended.time
+                ))
                 return
             }
             let wait = max(0, DockClickController.settleTime - (now - event.timestamp))
@@ -447,30 +566,53 @@ final class DockClickController {
         }
     }
 
-    // MARK: - Worker queue: the Dock and the windows
+    // MARK: - Dock queue: which icon
 
-    /// Runs while the button is still down: works out what a click here would
-    /// mean, from the state before the Dock has done anything about it.
-    private func prepare(_ press: Press) {
+    /// Runs while the button is still down, and before anything that could
+    /// hold it up: notes what the Dock and the screen looked like before the
+    /// Dock did anything about the click.
+    private func identify(_ press: Press) {
         let began = ProcessInfo.processInfo.systemUptime
-        defer {
-            press.workerTime = ProcessInfo.processInfo.systemUptime - began
+        if let app = press.front {
+            press.windowsAtPress = DockClickController.windowsOnScreen(of: app.processIdentifier)
+        }
+        let dock = AXUIElementCreateApplication(press.dockPID)
+        press.icon = DockClickController.appIcon(at: press.point, in: dock)
+        if press.icon != nil {
+            press.exposeAtPress = DockClickController.showsExpose(dock)
+        }
+        press.dockTime = ProcessInfo.processInfo.systemUptime - began
+        worker.async {
+            self.prepare(press)
+        }
+    }
+
+    // MARK: - Worker queue: the windows
+
+    /// Works out what the click means. This may run late when windows are
+    /// still on their way into the Dock, which is why it takes the Dock and
+    /// the screen as `identify` found them.
+    private func prepare(_ press: Press) {
+        guard let icon = press.icon else {
+            DockClickController.trace("a click on the Dock, but not on the icon of an app")
+            return
+        }
+        guard !press.exposeAtPress else {
+            DockClickController.trace("\(icon.title): left to the Dock, Mission Control was up")
+            return
         }
         switch press.mode {
         case .off:
             return
 
         case .hide:
-            guard let app = press.front, let icon = dockIcon(at: press.point) else {
-                return
-            }
-            guard icon.belongs(to: app) else {
-                DockClickController.trace("\(icon.title): left to the Dock, it was not in front")
+            guard let app = press.front, icon.belongs(to: app) else {
+                DockClickController.trace("\(icon.title): left to the Dock, it had not been in front")
                 return
             }
             // Without a window to hide, the click is a request for one:
             // many apps open a new window when their icon is clicked.
-            guard DockClickController.hasWindowOnScreen(app.processIdentifier) else {
+            guard !press.windowsAtPress.isEmpty else {
                 DockClickController.trace("\(icon.title): left to the Dock, no window on screen")
                 return
             }
@@ -478,43 +620,45 @@ final class DockClickController {
 
         case .minimize:
             stowed = stowed.filter { !$0.value.app.isTerminated }
-            guard press.front != nil || !stowed.isEmpty, let icon = dockIcon(at: press.point) else {
-                return
-            }
-            if let app = press.front, icon.belongs(to: app) {
+            if let app = press.front, icon.belongs(to: app), !press.windowsAtPress.isEmpty {
                 let windows = minimizableWindows(of: app.processIdentifier)
                 if !windows.isEmpty {
                     press.plan = .minimize(app, windows)
                     return
                 }
             }
-            if let entry = stowed.first(where: { icon.belongs(to: $0.value.app) }) {
+            guard let entry = stowed.first(where: { icon.belongs(to: $0.value.app) }) else {
+                DockClickController.trace("\(icon.title): left to the Dock, nothing to minimize or bring back")
+                return
+            }
+            if stillStowed(entry.key) {
                 press.plan = .restore(entry.key)
             } else {
-                DockClickController.trace("\(icon.title): left to the Dock, nothing to minimize or bring back")
+                DockClickController.trace("\(icon.title): left to the Dock, its windows were moved by hand since")
             }
         }
     }
 
-    /// Runs once the click is complete and the Dock has had `settleTime` for
-    /// its own part.
+    /// Runs once the click is complete and `settleTime` has passed.
     private func perform(_ press: Press) {
         if case .nothing = press.plan {
             return
         }
         DockClickController.trace(String(
-            format: "%.3f ms on the main thread, %.2f ms to ask the Dock and look at the windows",
+            format: "%.3f ms on the main thread, %.2f ms to ask the Dock",
             press.mainTime * 1000,
-            press.workerTime * 1000
+            press.dockTime * 1000
         ))
         switch press.plan {
         case .nothing:
             return
 
         case .hide(let app):
+            guard dockLeftItAlone(press, app) else {
+                return
+            }
             DispatchQueue.main.async {
-                guard !press.cancelled, DockClickController.isInTime(press),
-                      DockClickController.isInFront(app), !app.isHidden else {
+                guard self.stillWanted(press, app), !app.isHidden else {
                     return
                 }
                 // What hide() returns is not worth reading: it says false
@@ -524,9 +668,11 @@ final class DockClickController {
             }
 
         case .minimize(let app, let windows):
+            guard dockLeftItAlone(press, app) else {
+                return
+            }
             DispatchQueue.main.async {
-                guard !press.cancelled, DockClickController.isInTime(press),
-                      DockClickController.isInFront(app) else {
+                guard self.stillWanted(press, app) else {
                     return
                 }
                 self.worker.async {
@@ -537,6 +683,31 @@ final class DockClickController {
         case .restore(let pid):
             restore(pid)
         }
+    }
+
+    /// Whether the Dock made nothing of the click, as far as can be seen. A
+    /// force click opens App Exposé, and a click on the icon of an app with
+    /// windows on another Space moves there. Then the click has done its
+    /// work, and putting the app away on top of it would undo that.
+    private func dockLeftItAlone(_ press: Press, _ app: NSRunningApplication) -> Bool {
+        let name = app.localizedName ?? "?"
+        if DockClickController.showsExpose(AXUIElementCreateApplication(press.dockPID)) {
+            DockClickController.trace("\(name): left to the Dock, which opened Mission Control")
+            return false
+        }
+        if DockClickController.windowsOnScreen(of: app.processIdentifier) != press.windowsAtPress {
+            DockClickController.trace("\(name): left to the Dock, its windows changed with the click")
+            return false
+        }
+        return true
+    }
+
+    /// Main thread: the last look before an app is put away.
+    private func stillWanted(_ press: Press, _ app: NSRunningApplication) -> Bool {
+        return !press.cancelled
+            && ProcessInfo.processInfo.systemUptime - press.time < DockClickRules.tooLate
+            && spaceChangedAt < press.time
+            && NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
     }
 
     private func minimize(_ windows: [AXUIElement], of app: NSRunningApplication) {
@@ -565,13 +736,48 @@ final class DockClickController {
         DockClickController.trace("\(app.localizedName ?? "?"): minimized \(count) of \(windows.count) windows")
     }
 
+    /// Whether every window that was minimized for the app is still in the
+    /// Dock. If one has been brought back by hand since, the user has taken
+    /// over: the list is forgotten, and a later click on the icon does not
+    /// surprise anybody with windows from hours ago.
+    private func stillStowed(_ pid: pid_t) -> Bool {
+        guard var entry = stowed[pid] else {
+            return false
+        }
+        var kept: [AXUIElement] = []
+        for window in entry.windows {
+            // Back to the short timeout: this is a question, not an animation.
+            AXUIElementSetMessagingTimeout(window, 0)
+            var value: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &value)
+            if result == .cannotComplete {
+                // The app is not answering now. Let the attempt decide.
+                return true
+            }
+            guard result == .success, let minimized = value as? Bool else {
+                // The window is gone.
+                continue
+            }
+            guard minimized else {
+                stowed[pid] = nil
+                return false
+            }
+            kept.append(window)
+        }
+        entry.windows = kept
+        stowed[pid] = kept.isEmpty ? nil : entry
+        return !kept.isEmpty
+    }
+
     private func restore(_ pid: pid_t) {
         guard var entry = stowed.removeValue(forKey: pid) else {
             return
         }
-        // Back to front, so the window that was in front ends up there again.
+        // Last in, first out, so the window that was in front ends up there
+        // again.
         var count = 0
         while let window = entry.windows.popLast() {
+            AXUIElementSetMessagingTimeout(window, DockClickController.animationTimeout)
             let result = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
             if result == .cannotComplete {
                 entry.windows.append(window)
@@ -581,41 +787,6 @@ final class DockClickController {
             count += 1
         }
         DockClickController.trace("\(entry.app.localizedName ?? "?"): brought back \(count) windows")
-    }
-
-    /// The app icon in the Dock at this point, if there is one.
-    private func dockIcon(at point: CGPoint) -> DockIcon? {
-        guard AXIsProcessTrusted() else {
-            DockClickController.trace("no Accessibility permission")
-            return nil
-        }
-        guard let dock = dockElement() else {
-            return nil
-        }
-        // Asked of the Dock alone. The same question to the whole system
-        // would go to whichever app owns the window under the pointer.
-        var hit: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(dock, Float(point.x), Float(point.y), &hit) == .success,
-              let element = hit,
-              AX.string(element, kAXSubroleAttribute) == "AXApplicationDockItem",
-              let url = AX.url(element, kAXURLAttribute) else {
-            return nil
-        }
-        let title = AX.string(element, kAXTitleAttribute) ?? url.deletingPathExtension().lastPathComponent
-        return DockIcon(title: title, url: url)
-    }
-
-    private func dockElement() -> AXUIElement? {
-        if let known = dock, !known.app.isTerminated {
-            return known.element
-        }
-        dock = nil
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else {
-            return nil
-        }
-        let element = AXUIElementCreateApplication(app.processIdentifier)
-        dock = (app: app, element: element)
-        return element
     }
 
     /// The app's windows on this Space that can go into the Dock, front to
@@ -644,31 +815,62 @@ final class DockClickController {
         return found
     }
 
-    /// Whether the app shows an ordinary window on this Space right now. The
-    /// window server is asked, not the app, so a hung app cannot hold this up.
-    private static func hasWindowOnScreen(_ pid: pid_t) -> Bool {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+    // MARK: - Questions that any queue may ask
+
+    /// The app icon in the Dock at this point, if there is one.
+    private static func appIcon(at point: CGPoint, in dock: AXUIElement) -> DockIcon? {
+        guard AXIsProcessTrusted() else {
+            trace("no Accessibility permission")
+            return nil
+        }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(dock, Float(point.x), Float(point.y), &hit) == .success,
+              let element = hit,
+              AX.string(element, kAXSubroleAttribute) == "AXApplicationDockItem",
+              let url = AX.url(element, kAXURLAttribute) else {
+            return nil
+        }
+        return DockIcon(
+            title: AX.string(element, kAXTitleAttribute) ?? url.deletingPathExtension().lastPathComponent,
+            url: url,
+            isRunning: AX.bool(element, "AXIsApplicationRunning") ?? true
+        )
+    }
+
+    /// Whether the Dock is showing more than its bar: Mission Control or App
+    /// Exposé. There a click on a Dock icon leaves the mode and shows the
+    /// app, so it is a request to see the app. The Dock draws these modes
+    /// itself and shows each to Accessibility as a group next to its list of
+    /// icons (seen on macOS 15 and 26 as "mc" and "appexpose").
+    private static func showsExpose(_ dock: AXUIElement) -> Bool {
+        guard let children = AX.value(dock, kAXChildrenAttribute) as? [AXUIElement] else {
             return false
         }
-        return list.contains { window in
+        return children.contains { AX.string($0, kAXRoleAttribute) == "AXGroup" }
+    }
+
+    /// The ordinary windows the app shows on this Space right now. The
+    /// window server is asked, not the app, so a hung app cannot hold this
+    /// up.
+    private static func windowsOnScreen(of pid: pid_t) -> Set<CGWindowID> {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        var found: Set<CGWindowID> = []
+        for window in list {
             guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
                   (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
                   ((window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1) > 0.01,
+                  let number = (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
                   let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else {
-                return false
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  frame.width >= 40, frame.height >= 40 else {
+                continue
             }
-            return frame.width >= 40 && frame.height >= 40
+            found.insert(number)
         }
-    }
-
-    private static func isInFront(_ app: NSRunningApplication) -> Bool {
-        return NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
-    }
-
-    private static func isInTime(_ press: Press) -> Bool {
-        return ProcessInfo.processInfo.systemUptime - press.time < DockClickRules.tooLate
+        return found
     }
 
     /// With `--resident`, one line on stderr per Dock click that was looked
@@ -711,6 +913,10 @@ final class DockClickController {
             "dock click: an app brought to the front by the click was not in front",
             DockClickRules.wasInFront(since: 50, before: 100)
                 && !DockClickRules.wasInFront(since: 100.01, before: 100)
+        )
+        check(
+            "dock click: nor was one that arrived half a second ago",
+            !DockClickRules.wasInFront(since: 99.5, before: 100)
         )
         check(
             "dock click: one app, two spellings of its path",
