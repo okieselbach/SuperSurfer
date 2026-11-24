@@ -123,7 +123,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         })
 
         menu.addItem(.separator())
-        menu.addItem(DockClickController.shared.menuItem())
+        menu.addItem(DockClickController.shared.menuItem(app: app))
         if LoginItem.isSupported {
             let item = ActionMenuItem(tr("Launch at Login", "Beim Anmelden starten")) {
                 app.toggleLoginItem()

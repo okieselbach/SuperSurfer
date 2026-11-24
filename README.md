@@ -106,6 +106,7 @@ The menu:
 | **Picker Key** | Which modifier key opens the picker: ⌥ Option (default), ⇧ Shift, ⌃ Control, ⌘ Command, fn, or off. |
 | **Choose Browser for Copied Link…** | The picker for the link in the clipboard. Also the quickest way to see how a link *would* be routed. |
 | **Edit config.js**, **Show Config Folder**, **Show Decision Log**, **Reload Configuration** | Shortcuts to the files. Config changes are picked up on the next link by themselves, and the list of browsers and profiles is refreshed in the background; reloading re-reads all of it at once, e.g. right after adding a browser profile. |
+| **Dock Click** | Not about links: what a click on the Dock icon of the app in front does. Off unless you choose otherwise. See [Dock Click](#dock-click). |
 | **Launch at Login** | Start with the Mac (macOS 13 or later), so the first click of the day is as fast as the rest. |
 | **Make SuperSurfer the Default Browser** | Shown while something else is the default. |
 
@@ -126,6 +127,26 @@ Hold the picker key (⌥ Option by default) while clicking a link and a menu ope
 Escape closes the menu and the link is not opened. Without the key, nothing ever asks: links follow `config.js`, then the saved rules, then `defaultBrowser`.
 
 Some apps use ⌥-click themselves (browsers download the link target). Pick another key in the menu if that gets in the way.
+
+### Dock Click
+
+Clicking the Dock icon of the app you are already in does nothing on macOS. **Dock Click** in the menu gives that click a job, as on Windows and most Linux desktops:
+
+| Choice | A click on the icon of the app in front | The next click on the icon |
+|---|---|---|
+| **Hide App** | hides the app, like ⌘H | shows it again (macOS does that by itself) |
+| **Minimize Windows** | sends every window the app has on the current Space into the Dock | brings back all of them, where macOS alone would bring back one |
+| **Off** *(default)* | nothing | |
+
+This has nothing to do with routing links. It is here because SuperSurfer is loaded anyway, which is cheaper than one more menu bar utility. While it is off, nothing is installed and no permission is needed.
+
+Only a plain click counts, and only on the icon of an app that was in front *before* the click. Everything else stays with the Dock: a click on another app's icon switches to that app, a long press opens the icon's menu, and a click with ⌘, ⌥, ⌃ or ⇧ held keeps the meaning macOS gives it. The second click of a double click is ignored, so a double click ends where it began. An app with no window on screen is left alone too, because there the click is how you ask for one.
+
+**Permission.** The first time you choose *Hide App* or *Minimize Windows*, macOS asks for the Accessibility permission (System Settings → Privacy & Security → Accessibility). SuperSurfer needs it to ask the Dock which icon is under the pointer and to minimize another app's windows. It works from the next click. Until the permission is there, the menu entry carries a ⚠︎ and clicks behave as always.
+
+macOS ties this permission to the app's signature, and releases are not signed with a Developer ID yet. After an update the switch in System Settings still looks on but no longer counts: remove SuperSurfer from that list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
+
+**What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. Each click then costs one question to the Dock, asked on a queue of its own: never on the main thread, never on the queue that routes links, and with a timeout of 0.4 s. Between clicks the app is as idle as before.
 
 ## Saved rules (`rules.json`)
 
@@ -253,6 +274,13 @@ dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --self-test   # check the Swift/
 bash packaging/macos/smoke-test.sh                            # self-test, then start the app and route a real link
 ```
 
+Dock Click has a test of its own, which clicks real Dock icons and checks what happens to the windows. It needs the Accessibility permission for the terminal it runs in, and the Mac to itself for a minute:
+
+```bash
+bash packaging/macos/dock-click-test.sh
+SUPERSURFER_DOCK_CLICK=hide dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --resident   # or minimize: try it without storing the choice; prints a line per Dock click
+```
+
 When replacing an installed copy, quit the running app first (menu → Quit SuperSurfer); the next link or `open -a SuperSurfer` starts the new one.
 
 To sign with a Developer ID instead of ad hoc (hardened runtime and timestamp, as notarization requires):
@@ -355,13 +383,14 @@ v0.2.x is usable as a default browser on macOS, Windows, and Linux:
 - Built-in URL cleaning with `route` / `direct` / `off` modes (safelink unwrapping, UTM stripping)
 - macOS `SuperSurfer.app` bundle + Launch Services / duti registration
 - macOS menu bar app that stays loaded: recent links, picker on a modifier key, launch at login
+- macOS Dock Click (optional): a click on the Dock icon of the app in front hides the app or minimizes its windows
 - Saved rules in `rules.json`, managed by the picker or `supersurfer rules`
 - Windows `supersurfer.exe` + registry browser registration
 - Linux `supersurfer` binary + `.desktop` / xdg-settings registration
 - macOS, Windows, and Linux browser discovery + launch
 - CLI: `init`, `doctor`, `test`, `rules`, `logs`
 
-**Not yet:** signed/notarized distribution, signed rules updates. Until the app is notarized, macOS refuses to open a downloaded copy — run `xattr -cr /Applications/SuperSurfer.app` once, or allow it under System Settings → Privacy & Security → Open Anyway. Without a Developer ID signature, macOS also forgets the permission to read browser profiles (macOS 27 and later) with every update.
+**Not yet:** signed/notarized distribution, signed rules updates. Until the app is notarized, macOS refuses to open a downloaded copy — run `xattr -cr /Applications/SuperSurfer.app` once, or allow it under System Settings → Privacy & Security → Open Anyway. Without a Developer ID signature, macOS also forgets two permissions with every update: reading browser profiles (macOS 27 and later) and Accessibility, which only [Dock Click](#dock-click) needs.
 
 ## License
 

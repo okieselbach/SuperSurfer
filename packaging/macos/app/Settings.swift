@@ -132,4 +132,18 @@ enum PrivacySettings {
             NSWorkspace.shared.open(pane)
         }
     }
+
+    /// Privacy & Security > Accessibility, where Dock Click is allowed to
+    /// ask the Dock about its icons.
+    static func openAccessibility() {
+        let address: String
+        if #available(macOS 13.0, *) {
+            address = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"
+        } else {
+            address = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        }
+        if let pane = URL(string: address) {
+            NSWorkspace.shared.open(pane)
+        }
+    }
 }

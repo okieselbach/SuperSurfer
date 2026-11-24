@@ -207,6 +207,8 @@ final class DockClickController {
 
     // Main thread only.
     private var monitor: Any?
+    /// Whether the monitor was installed with the permission already given.
+    private var monitorHasPermission = false
     private var activationObserver: NSObjectProtocol?
     private var frontPID: pid_t = 0
     private var frontSince: TimeInterval = 0
@@ -225,7 +227,21 @@ final class DockClickController {
     /// While the choice is "off" nothing is installed.
     func refresh() {
         let mode = DockClick.current
-        if mode != .off && monitor == nil {
+        guard mode != .off else {
+            if let installed = monitor {
+                NSEvent.removeMonitor(installed)
+            }
+            monitor = nil
+            if let observer = activationObserver {
+                NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            }
+            activationObserver = nil
+            monitorHasPermission = false
+            press = nil
+            return
+        }
+
+        if activationObserver == nil {
             // This process uses Accessibility for nothing else, so the
             // timeout can be set for all of it.
             AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), DockClickController.answerTimeout)
@@ -235,25 +251,38 @@ final class DockClickController {
                 object: nil,
                 queue: .main
             ) { [weak self] note in
-                self?.noteFront(note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)
+                guard let self = self else {
+                    return
+                }
+                self.noteFront(note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)
+                // Leaving System Settings after giving the permission is a
+                // moment to notice that it is there now.
+                if !self.monitorHasPermission {
+                    self.refresh()
+                }
             }
-            // Mouse buttons can be watched without any permission; it is the
-            // question to the Dock that needs Accessibility.
-            monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
-                self?.handle(event)
-            }
-            DockClickController.trace(
-                "\(mode.rawValue), Accessibility permission: \(AXIsProcessTrusted() ? "yes" : "no")"
-            )
-        } else if mode == .off, let installed = monitor {
-            NSEvent.removeMonitor(installed)
-            monitor = nil
-            if let observer = activationObserver {
-                NSWorkspace.shared.notificationCenter.removeObserver(observer)
-            }
-            activationObserver = nil
-            press = nil
         }
+
+        // Mouse buttons can be watched without any permission; it is the
+        // question to the Dock that needs Accessibility. An event tap set up
+        // before a permission is given stays deaf, though. In case a monitor
+        // ever does the same, it is replaced once the permission is there.
+        if monitor != nil && monitorHasPermission {
+            return
+        }
+        let permitted = AXIsProcessTrusted()
+        if monitor != nil && !permitted {
+            return
+        }
+        if let installed = monitor {
+            NSEvent.removeMonitor(installed)
+        }
+        monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
+            self?.handle(event)
+        }
+        monitorHasPermission = permitted
+        press = nil
+        DockClickController.trace("\(mode.rawValue), Accessibility permission: \(permitted ? "yes" : "no")")
     }
 
     private func choose(_ mode: DockClick) {
@@ -275,7 +304,8 @@ final class DockClickController {
 
     /// The "Dock Click" entry of the status menu, built for the state as it
     /// is right now.
-    func menuItem() -> NSMenuItem {
+    func menuItem(app: AppDelegate) -> NSMenuItem {
+        refresh()
         let current = DockClick.current
         let needsPermission = current != .off && !AXIsProcessTrusted()
 
@@ -296,7 +326,7 @@ final class DockClickController {
                 "⚠︎ Needs the Accessibility permission. Show…",
                 "⚠︎ Benötigt die Berechtigung „Bedienungshilfen“. Anzeigen …"
             )) { [weak self] in
-                self?.explainPermission()
+                self?.explainPermission(app)
             })
         }
 
@@ -304,47 +334,20 @@ final class DockClickController {
         return MenuItems.submenu(needsPermission ? "⚠︎ " + title : title, items: entries)
     }
 
-    /// Runs from a menu action, that is from the run loop and not from a
-    /// block on the main dispatch queue, so links keep being routed while the
-    /// alert is up.
-    private func explainPermission() {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = tr(
-            "Dock Click needs the Accessibility permission",
-            "Dock-Klick benötigt die Berechtigung „Bedienungshilfen“"
+    private func explainPermission(_ app: AppDelegate) {
+        app.showAlert(
+            title: tr(
+                "Dock Click needs the Accessibility permission",
+                "Dock-Klick benötigt die Berechtigung „Bedienungshilfen“"
+            ),
+            text: tr(
+                "SuperSurfer asks the Dock which icon a click hit, and hides or minimizes the app in front. macOS allows both only with this permission.\n\nOpen System Settings > Privacy & Security > Accessibility and switch on SuperSurfer. It works from the next click, without a restart.\n\nAlready switched on there? macOS ties the permission to the app's signature, and releases are not signed with a Developer ID yet. After an update the switch still looks on but no longer counts. Remove SuperSurfer from the list with the minus button and add it again with the plus button.",
+                "SuperSurfer fragt das Dock, welches Symbol ein Klick getroffen hat, und blendet die App im Vordergrund aus oder minimiert sie. Beides erlaubt macOS nur mit dieser Berechtigung.\n\nÖffne Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen und schalte SuperSurfer ein. Es wirkt ab dem nächsten Klick, ohne Neustart.\n\nDort schon eingeschaltet? macOS bindet die Berechtigung an die Signatur der App, und die Releases sind noch nicht mit einer Developer ID signiert. Nach einem Update sieht der Schalter weiter eingeschaltet aus, zählt aber nicht mehr. Entferne SuperSurfer mit dem Minus-Knopf aus der Liste und füge es mit dem Plus-Knopf wieder hinzu."
+            ),
+            action: AlertAction(title: tr("Open System Settings", "Systemeinstellungen öffnen")) {
+                PrivacySettings.openAccessibility()
+            }
         )
-        alert.informativeText = tr(
-            """
-            SuperSurfer asks the Dock which icon a click hit, and hides or minimizes the app in front. \
-            macOS allows both only with this permission.
-
-            Switch SuperSurfer on under System Settings → Privacy & Security → Accessibility. \
-            It works from the next click, without a restart.
-
-            Already switched on there? As long as SuperSurfer is not signed with a Developer ID, \
-            macOS ties the permission to the exact build and stops honouring it after an update. \
-            Remove SuperSurfer from the list with “−” and add it again with “+”.
-            """,
-            """
-            SuperSurfer fragt das Dock, welches Symbol ein Klick getroffen hat, und blendet die App im \
-            Vordergrund aus oder minimiert sie. Beides erlaubt macOS nur mit dieser Berechtigung.
-
-            Schalte SuperSurfer unter Systemeinstellungen → Datenschutz & Sicherheit → Bedienungshilfen ein. \
-            Es wirkt ab dem nächsten Klick, ohne Neustart.
-
-            Dort schon eingeschaltet? Solange SuperSurfer nicht mit einer Developer ID signiert ist, \
-            bindet macOS die Berechtigung an genau diesen Build und beachtet sie nach einem Update nicht mehr. \
-            Entferne SuperSurfer mit „−“ aus der Liste und füge es mit „+“ wieder hinzu.
-            """
-        )
-        alert.addButton(withTitle: tr("Open Settings", "Einstellungen öffnen"))
-        alert.addButton(withTitle: tr("Not Now", "Nicht jetzt"))
-        guard alert.runModal() == .alertFirstButtonReturn,
-              let page = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
-            return
-        }
-        NSWorkspace.shared.open(page)
     }
 
     // MARK: - Main thread: watching clicks
@@ -477,8 +480,10 @@ final class DockClickController {
                 guard DockClickController.isInFront(app), !app.isHidden else {
                     return
                 }
-                let sent = app.hide()
-                DockClickController.trace("\(app.localizedName ?? "?"): \(sent ? "hidden" : "could not be hidden")")
+                // What hide() returns is not worth reading: it says false
+                // for requests that go through.
+                app.hide()
+                DockClickController.trace("\(app.localizedName ?? "?"): hidden")
             }
 
         case .minimize(let app, let windows):

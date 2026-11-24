@@ -104,6 +104,7 @@ SuperSurfer stays loaded on macOS, so a link is routed in a fraction of a millis
 - **Picker Key** — the modifier key that opens the picker (⌥ Option by default, or off).
 - **Choose Browser for Copied Link…** — the picker for the link in the clipboard.
 - **Edit config.js**, **Show Config Folder**, **Show Decision Log**, **Reload Configuration**.
+- **Dock Click** — optional, and not about links: a click on the Dock icon of the app in front hides the app or minimizes its windows. See [Dock Click](#dock-click).
 - **Launch at Login** (macOS 13 or later).
 
 Changes to `config.js` take effect with the next link; there is nothing to restart. If the file has an error, links keep following the last version that worked and the icon turns into a warning triangle. Newly installed browsers and new browser profiles are noticed in the background within a few minutes; **Reload Configuration** re-reads everything at once.
@@ -127,6 +128,18 @@ To give the list back, open System Settings → Privacy & Security → **Files &
 Commands in a terminal run with the permissions of the terminal app. Give that app the same access if `supersurfer doctor` should list profiles too.
 
 macOS ties the permission to the app's signature. Releases are not signed with a Developer ID yet, so expect to give it again after an update.
+
+### Dock Click
+
+Clicking the Dock icon of the app you are already in does nothing on macOS. Choose **Dock Click → Hide App** or **Minimize Windows** in the menu and that click puts the app away; the next click on the icon brings it back. With *Minimize Windows*, every window the app has on the current Space goes into the Dock, and all of them come back together.
+
+It is off by default and unrelated to routing links.
+
+- The first time, macOS asks for the Accessibility permission: System Settings → Privacy & Security → **Accessibility**, switch on SuperSurfer. It works from the next click. While the permission is missing, the menu entry shows ⚠︎ and says what to do.
+- Only a plain click on the icon of the app that is already in front counts. Clicks on other icons, long presses and clicks with ⌘, ⌥, ⌃ or ⇧ work as always.
+- Windows on other Spaces and full-screen windows are not minimized.
+
+macOS ties the permission to the app's signature. Releases are not signed with a Developer ID yet, so expect to give it again after an update: remove SuperSurfer from the Accessibility list and add it again.
 
 ## Saved rules
 
@@ -163,6 +176,8 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 **No profiles, or links open in the wrong profile (macOS 27 and later)** — macOS no longer lets apps read browser data unasked. See [Browser profiles on macOS 27 and later](#browser-profiles-on-macos-27-and-later).
 
 **"Apple could not verify…" when opening the app (macOS)** — run `xattr -cr /Applications/SuperSurfer.app` once after downloading.
+
+**Dock Click does nothing (macOS)** — the menu entry shows ⚠︎ while the Accessibility permission is missing. If System Settings shows SuperSurfer as switched on, the permission belongs to an older build: remove SuperSurfer from the list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
 
 **No menu bar icon (macOS)** — start the app with `open -a SuperSurfer`. If the icon was dragged out of the menu bar, this also brings it back.
 

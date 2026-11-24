@@ -283,25 +283,44 @@ func preflight() -> Never {
     exit(0)
 }
 
+/// The app in front goes away with a click on its icon and is back, and
+/// stays, with the next one.
+func hideAndBack(_ app: NSRunningApplication, held: TimeInterval = 0.08) {
+    click(app, held: held)
+    expect("\(name(app)) is hidden", of: app) {
+        windowsOnScreen(app) == 0 && !isInFront(app)
+    }
+    pause(0.8)
+    click(app, held: held)
+    expect("\(name(app)) is back", of: app) {
+        windowsOnScreen(app) > 0 && isInFront(app)
+    }
+    stays("and stays", of: app, for: 2) {
+        windowsOnScreen(app) > 0 && isInFront(app)
+    }
+}
+
+func closeWindows(of app: NSRunningApplication) {
+    let element = AXUIElementCreateApplication(app.processIdentifier)
+    for window in elements(element, kAXWindowsAttribute) {
+        if let button = value(window, kAXCloseButtonAttribute) {
+            AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+        }
+    }
+}
+
+func finderWithWindow() -> NSRunningApplication {
+    run("/usr/bin/open", ["/Applications"])
+    return bringToFront("Finder", "com.apple.finder", windows: 1)
+}
+
 func testHide() {
     let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
     say("      \(state(of: calculator))")
-    say("      icon: \(icon(of: calculator)?.url?.path ?? "?"), app: \(calculator.bundleURL?.path ?? "?")")
 
     for (label, held) in [("click", 0.08), ("tap", 0.004)] {
         say("-- \(label): the app in front is hidden, the next \(label) brings it back")
-        click(calculator, held: held)
-        expect("Calculator is hidden", of: calculator) {
-            windowsOnScreen(calculator) == 0 && !isInFront(calculator)
-        }
-        pause(0.8)
-        click(calculator, held: held)
-        expect("Calculator is back", of: calculator) {
-            windowsOnScreen(calculator) > 0 && isInFront(calculator)
-        }
-        stays("and stays", of: calculator, for: 2) {
-            windowsOnScreen(calculator) > 0 && isInFront(calculator)
-        }
+        hideAndBack(calculator, held: held)
 
         say("-- \(label): an app that only comes to the front with it is left alone")
         finderToFront()
@@ -314,6 +333,32 @@ func testHide() {
         }
     }
 
+    say("-- Safari: its Dock icon and the running app need not name the same path")
+    let safari = bringToFront("Safari", "com.apple.Safari", windows: 1)
+    say("      icon: \(icon(of: safari)?.url?.path ?? "?")")
+    say("      app:  \(safari.bundleURL?.path ?? "?")")
+    hideAndBack(safari)
+
+    say("-- Finder, which is always running")
+    let finder = finderWithWindow()
+    hideAndBack(finder)
+
+    say("-- an app without a window is left alone: there the click asks for one")
+    closeWindows(of: finder)
+    expect("Finder has no window", of: finder) {
+        windowsOnScreen(finder) == 0 && isInFront(finder)
+    }
+    pause(1)
+    click(finder)
+    expect("Finder opens a window", of: finder) {
+        windowsOnScreen(finder) > 0
+    }
+    stays("and is not hidden", of: finder, for: 2.5) {
+        windowsOnScreen(finder) > 0 && isInFront(finder)
+    }
+
+    closeWindows(of: finder)
+    safari.terminate()
     calculator.terminate()
 }
 
@@ -372,6 +417,23 @@ func testMinimize() {
         windowsOnScreen(textEdit) >= 2 && minimizedWindows(textEdit) == 0
     }
 
+    say("-- Finder")
+    let finder = finderWithWindow()
+    let open = windowsOnScreen(finder)
+    say("      \(state(of: finder))")
+    click(finder)
+    expect("its windows are minimized", of: finder, within: 10) {
+        windowsOnScreen(finder) == 0 && minimizedWindows(finder) == open
+    }
+    pause(0.8)
+    click(finder)
+    expect("and back", of: finder, within: 10) {
+        windowsOnScreen(finder) >= open && minimizedWindows(finder) == 0
+    }
+    pause(1.5)
+    say("      \(state(of: finder))")
+
+    closeWindows(of: finder)
     textEdit.terminate()
 }
 
