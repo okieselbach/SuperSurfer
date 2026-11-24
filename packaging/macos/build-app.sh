@@ -28,15 +28,17 @@ MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" \
 
 # rustc names the system libraries the archive depends on, but only when it
 # actually links. On an unchanged tree it prints nothing, so keep its last
-# answer next to the archive.
-NATIVE_LIBS="$(sed -n 's/^.*native-static-libs: //p' "$BUILD_LOG" | tail -n 1)"
+# answer next to the archive. The note may be wrapped in colour codes (CI sets
+# CARGO_TERM_COLOR=always); strip them, or the last flag ends in "ESC[0m".
+NATIVE_LIBS="$(sed -n 's/^.*native-static-libs: //p' "$BUILD_LOG" | tail -n 1 | sed $'s/\033\\[[0-9;]*m//g')"
 if [ -n "$NATIVE_LIBS" ]; then
   printf '%s\n' "$NATIVE_LIBS" > "$CORE_LIBS"
 elif [ -f "$CORE_LIBS" ]; then
   NATIVE_LIBS="$(cat "$CORE_LIBS")"
 else
-  NATIVE_LIBS="-liconv"
+  NATIVE_LIBS="-liconv -lproc"
 fi
+echo "Linking the core with: $NATIVE_LIBS"
 
 rm -rf "$APP"
 mkdir -p "$MACOS" "$APP/Contents/Resources"
