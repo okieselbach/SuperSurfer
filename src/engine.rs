@@ -19,7 +19,9 @@
 //! names; [`handle_json`] is the single entry point the C interface uses.
 
 use crate::browser::launch::{self, LaunchPlan};
-use crate::browser::registry::{normalize_browser_id, BrowserInstall, BrowserRegistry};
+use crate::browser::registry::{
+    has_profile_menu, normalize_browser_id, short_name, BrowserInstall, BrowserRegistry,
+};
 use crate::context::{Context, Modifiers, Opener, Platform};
 use crate::routing::{parse_browser_spec, RouteDecision, RouteSource, Router};
 use crate::rules::{self, Rule, RuleSet};
@@ -54,6 +56,9 @@ pub enum Request {
     Plan(PlanRequest),
     /// Installed browsers and their profiles.
     Browsers,
+    /// Browser profiles that can have a shortcut in the Dock, with what the
+    /// shortcut needs to bring a profile's window to the front.
+    Shortcuts,
     /// Saved rules from `rules.json`.
     Rules,
     /// Save "always open this domain in that browser".
@@ -245,6 +250,43 @@ pub struct BrowsersReply {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ShortcutProfile {
+    pub name: String,
+    /// The folder the browser keeps the profile in. Unlike the name it never
+    /// changes, so it is what a shortcut remembers.
+    pub directory: String,
+    /// What the browser may call the profile in its own profile menu, most
+    /// likely first.
+    pub menu_titles: Vec<String>,
+    /// Arguments that make the browser open a window of this profile.
+    pub launch_args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutBrowser {
+    pub id: String,
+    pub name: String,
+    /// "Edge" for "Microsoft Edge": what a shortcut is named after.
+    pub short_name: String,
+    pub app_path: String,
+    pub bundle_id: Option<String>,
+    pub profiles: Vec<ShortcutProfile>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutsReply {
+    pub ok: bool,
+    pub error: Option<String>,
+    /// Only browsers whose own profile menu can bring a profile forward.
+    pub browsers: Vec<ShortcutBrowser>,
+    /// As in [`BrowsersReply`].
+    pub profiles_blocked: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuleInfo {
     pub domain: String,
     pub browser: String,
@@ -427,6 +469,41 @@ impl Engine {
             Err(err) => BrowsersReply {
                 error: Some(format!("{err:#}")),
                 ..BrowsersReply::default()
+            },
+        }
+    }
+
+    pub fn shortcuts(&mut self) -> ShortcutsReply {
+        self.refresh();
+        if !self.registry_fresh || self.registry_checked.elapsed() > REGISTRY_UI_MAX_AGE {
+            self.refresh_registry();
+        }
+        let listed = self.with_registry(|registry| {
+            let mut browsers = registry
+                .list()
+                .into_iter()
+                .filter_map(shortcut_browser)
+                .collect::<Vec<_>>();
+            browsers.sort_by_cached_key(|browser| browser.name.to_lowercase());
+            let mut blocked: Vec<String> = registry
+                .unreadable_profiles()
+                .iter()
+                .filter(|failure| failure.denied && has_profile_menu(&failure.browser_id))
+                .map(|failure| failure.browser.clone())
+                .collect();
+            blocked.sort_by_key(|name| name.to_lowercase());
+            (browsers, blocked)
+        });
+        match listed {
+            Ok((browsers, profiles_blocked)) => ShortcutsReply {
+                ok: true,
+                error: None,
+                browsers,
+                profiles_blocked,
+            },
+            Err(err) => ShortcutsReply {
+                error: Some(format!("{err:#}")),
+                ..ShortcutsReply::default()
             },
         }
     }
@@ -814,6 +891,44 @@ fn browser_info(install: &BrowserInstall) -> Option<BrowserInfo> {
     })
 }
 
+fn shortcut_browser(install: &BrowserInstall) -> Option<ShortcutBrowser> {
+    if !has_profile_menu(&install.id) {
+        return None;
+    }
+    let app_path = install.app_path.clone()?;
+    let mut profiles: Vec<ShortcutProfile> = install
+        .profiles
+        .iter()
+        .filter_map(|profile| {
+            let directory = profile.directory.clone()?;
+            let launch_args = launch::profile_window_args(&install.id, &directory)?;
+            Some(ShortcutProfile {
+                name: profile.name.clone(),
+                menu_titles: profile.menu_titles_or_name(),
+                launch_args,
+                directory,
+            })
+        })
+        .filter(|profile| !profile.name.trim().is_empty())
+        .collect();
+    profiles.sort_by_cached_key(|profile| {
+        (
+            profile.name.to_lowercase(),
+            profile.directory.to_lowercase(),
+        )
+    });
+    Some(ShortcutBrowser {
+        id: install.id.clone(),
+        name: install.display_name.clone(),
+        short_name: short_name(&install.id)
+            .unwrap_or(&install.display_name)
+            .to_string(),
+        app_path,
+        bundle_id: install.bundle_id.clone(),
+        profiles,
+    })
+}
+
 impl Drop for Engine {
     fn drop(&mut self) {
         self.flush_log();
@@ -838,6 +953,7 @@ pub fn handle_json(engine: &mut Engine, request: &str) -> String {
         Ok(Request::Route(request)) => to_json(&engine.route(&request)),
         Ok(Request::Plan(request)) => to_json(&engine.plan(&request)),
         Ok(Request::Browsers) => to_json(&engine.browsers()),
+        Ok(Request::Shortcuts) => to_json(&engine.shortcuts()),
         Ok(Request::Rules) => to_json(&engine.rules()),
         Ok(Request::Remember(request)) => to_json(&engine.remember(&request)),
         Ok(Request::Forget(request)) => to_json(&engine.forget(&request)),

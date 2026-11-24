@@ -24,6 +24,24 @@ pub struct BrowserProfile {
     pub name: String,
     pub directory: Option<String>,
     pub path: Option<String>,
+    /// What a Chromium browser may call this profile in its own profile
+    /// menu, most likely first. Empty for other browsers, and in a cache
+    /// file written before this was read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub menu_titles: Vec<String>,
+}
+
+impl BrowserProfile {
+    /// The titles to look for in the browser's profile menu. A list read
+    /// from a cache file written before the titles were kept has none; until
+    /// the next scan the profile's name is the best guess.
+    pub fn menu_titles_or_name(&self) -> Vec<String> {
+        if self.menu_titles.is_empty() {
+            vec![self.name.clone()]
+        } else {
+            self.menu_titles.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +320,24 @@ pub fn is_chromium_browser(id: &str) -> bool {
         .into_iter()
         .find(|b| b.id == id)
         .is_some_and(|b| b.profile_kind == ProfileKind::Chromium)
+}
+
+/// Browsers whose own profile menu can bring a profile's window to the
+/// front, which is what a Dock shortcut for a profile relies on. Tried with
+/// Edge and Chrome; their other channels and Chromium share that menu.
+pub fn has_profile_menu(id: &str) -> bool {
+    matches!(
+        id,
+        "chrome" | "chrome-canary" | "chromium" | "edge" | "edge-beta" | "edge-canary"
+    )
+}
+
+/// What a browser goes by for short: "Edge" for "Microsoft Edge".
+pub fn short_name(id: &str) -> Option<&'static str> {
+    known_browsers()
+        .into_iter()
+        .find(|b| b.id == id)
+        .map(|b| b.aliases.first().copied().unwrap_or(b.display_name))
 }
 
 pub fn is_gecko_browser(id: &str) -> bool {
@@ -1426,6 +1462,7 @@ fn discover_gecko_profiles(ini_path: &Path) -> Result<Vec<BrowserProfile>> {
                     name: name.clone(),
                     directory: Some(name),
                     path: Some(path),
+                    menu_titles: Vec::new(),
                 });
             }
         }
@@ -1435,6 +1472,7 @@ fn discover_gecko_profiles(ini_path: &Path) -> Result<Vec<BrowserProfile>> {
             name: name.clone(),
             directory: Some(name),
             path: Some(path),
+            menu_titles: Vec::new(),
         });
     }
     Ok(profiles)
@@ -1453,13 +1491,45 @@ fn discover_chromium_profiles(support_dir: &Path) -> Result<Vec<BrowserProfile>>
         .pointer("/profile/info_cache")
         .and_then(|v| v.as_object())
     {
+        let text = |info: &serde_json::Value, key: &str| {
+            info.get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string()
+        };
+        // The name of the account a profile is signed in to, as the browser
+        // shows it: the given name where there is one.
+        let account = |info: &serde_json::Value| {
+            let given = text(info, "gaia_given_name");
+            if given.is_empty() {
+                text(info, "gaia_name")
+            } else {
+                given
+            }
+        };
         for (dir, info) in info_cache {
             let name = info
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or(dir)
                 .to_string();
+            let own_account = account(info);
+            let account_shared = !own_account.is_empty()
+                && info_cache.iter().any(|(other_dir, other)| {
+                    other_dir != dir && account(other).eq_ignore_ascii_case(&own_account)
+                });
+            let made_up_name = info
+                .get("is_using_default_name")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             profiles.push(BrowserProfile {
+                menu_titles: chromium_menu_titles(
+                    &name,
+                    &own_account,
+                    made_up_name,
+                    account_shared,
+                ),
                 name,
                 directory: Some(dir.clone()),
                 path: None,
@@ -1467,6 +1537,44 @@ fn discover_chromium_profiles(support_dir: &Path) -> Result<Vec<BrowserProfile>>
         }
     }
     Ok(profiles)
+}
+
+/// What a Chromium browser may call a profile in its own profile menu, most
+/// likely first.
+///
+/// The menu does not always show the profile's name. For a profile that is
+/// signed in, Chromium shows the name of the account instead while the
+/// profile still goes by the name the browser made up for it ("Person 1"),
+/// and both, as "Account (Profile)", once the profile was given a name or two
+/// profiles are signed in under the same account name. The first entry is
+/// what that rule yields; the others are the remaining forms, for a browser
+/// that follows another rule.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn chromium_menu_titles(
+    name: &str,
+    account: &str,
+    made_up_name: bool,
+    account_shared: bool,
+) -> Vec<String> {
+    let name = name.trim();
+    let account = account.trim();
+    let both = format!("{account} ({name})");
+    let candidates: Vec<&str> = if account.is_empty() {
+        vec![name]
+    } else if account.eq_ignore_ascii_case(name) {
+        vec![account, name]
+    } else if !made_up_name || account_shared {
+        vec![&both, name, account]
+    } else {
+        vec![account, &both, name]
+    };
+    let mut titles: Vec<String> = Vec::new();
+    for candidate in candidates {
+        if !candidate.is_empty() && !titles.iter().any(|title| title == candidate) {
+            titles.push(candidate.to_string());
+        }
+    }
+    titles
 }
 
 #[cfg(test)]
@@ -1485,6 +1593,7 @@ mod tests {
                     name: name.to_string(),
                     directory: Some(directory.to_string()),
                     path: None,
+                    menu_titles: Vec::new(),
                 })
                 .collect(),
         }
@@ -1686,6 +1795,98 @@ mod tests {
 
         let (profiles, failure) = profiles_if_readable(&chrome, Ok(vec![]));
         assert!(profiles.is_empty() && failure.is_none());
+    }
+
+    #[test]
+    fn menu_titles_follow_what_chromium_shows_for_a_profile() {
+        // Not signed in: the profile's name.
+        assert_eq!(chromium_menu_titles("Work", "", false, false), ["Work"]);
+        // Signed in under a name the browser made up: the account's name.
+        assert_eq!(
+            chromium_menu_titles("Person 1", "Ada", true, false),
+            ["Ada", "Ada (Person 1)", "Person 1"]
+        );
+        // Signed in and named by the user: both.
+        assert_eq!(
+            chromium_menu_titles("Work", "Ada", false, false),
+            ["Ada (Work)", "Work", "Ada"]
+        );
+        // Two profiles of one account are told apart by their own names,
+        // made up or not.
+        assert_eq!(
+            chromium_menu_titles("Person 2", "Ada", true, true),
+            ["Ada (Person 2)", "Person 2", "Ada"]
+        );
+        // Never "Ada (ada)".
+        assert_eq!(
+            chromium_menu_titles("ada", "Ada", false, false),
+            ["Ada", "ada"]
+        );
+        assert_eq!(chromium_menu_titles("Ada", "Ada", false, true), ["Ada"]);
+    }
+
+    #[test]
+    fn menu_titles_are_read_with_the_profiles() {
+        let dir = std::env::temp_dir().join(format!("supersurfer-titles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Local State"),
+            r#"{"profile":{"info_cache":{
+                "Default":{"name":"Person 1","is_using_default_name":true,
+                           "gaia_name":"Ada Lovelace","gaia_given_name":"Ada"},
+                "Profile 1":{"name":"Work","is_using_default_name":false,
+                             "gaia_name":"Grace Hopper","gaia_given_name":""},
+                "Profile 2":{"name":"Dev"},
+                "Profile 3":{"name":"Person 4","is_using_default_name":true,
+                             "gaia_name":"ADA","gaia_given_name":"ada"}
+            }}}"#,
+        )
+        .unwrap();
+        let mut profiles = discover_chromium_profiles(&dir).unwrap();
+        profiles.sort_by(|a, b| a.directory.cmp(&b.directory));
+        let titles: Vec<(&str, &[String])> = profiles
+            .iter()
+            .map(|p| (p.directory.as_deref().unwrap(), p.menu_titles.as_slice()))
+            .collect();
+        // "Default" and "Profile 3" share an account name, so both show
+        // their own name with it.
+        assert_eq!(titles[0].0, "Default");
+        assert_eq!(titles[0].1, ["Ada (Person 1)", "Person 1", "Ada"]);
+        // The full name where the account has no given name.
+        assert_eq!(titles[1].0, "Profile 1");
+        assert_eq!(titles[1].1, ["Grace Hopper (Work)", "Work", "Grace Hopper"]);
+        assert_eq!(titles[2].0, "Profile 2");
+        assert_eq!(titles[2].1, ["Dev"]);
+        assert_eq!(titles[3].0, "Profile 3");
+        assert_eq!(titles[3].1, ["ada (Person 4)", "Person 4", "ada"]);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // A profile from a cache file that knew no titles yet.
+        let cached: BrowserProfile =
+            serde_json::from_str(r#"{"name":"Work","directory":"Profile 1","path":null}"#).unwrap();
+        assert!(cached.menu_titles.is_empty());
+        assert_eq!(cached.menu_titles_or_name(), ["Work"]);
+        // And nothing is written for a profile without titles.
+        assert_eq!(
+            serde_json::to_string(&cached).unwrap(),
+            r#"{"name":"Work","directory":"Profile 1","path":null}"#
+        );
+    }
+
+    #[test]
+    fn only_browsers_with_a_profile_menu_get_dock_shortcuts() {
+        assert!(has_profile_menu("edge"));
+        assert!(has_profile_menu("chrome"));
+        assert!(has_profile_menu("chrome-canary"));
+        assert!(!has_profile_menu("vivaldi"));
+        assert!(!has_profile_menu("firefox"));
+        assert!(!has_profile_menu("safari"));
+        assert_eq!(short_name("edge"), Some("Edge"));
+        assert_eq!(short_name("chrome"), Some("Chrome"));
+        assert_eq!(short_name("edge-beta"), Some("Edge Beta"));
+        assert_eq!(short_name("chromium"), Some("Chromium"));
+        assert_eq!(short_name("no-such-browser"), None);
     }
 
     /// A directory where the file should be: present, but not readable as a
