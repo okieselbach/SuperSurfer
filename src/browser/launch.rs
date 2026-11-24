@@ -45,6 +45,63 @@ pub fn launch_browser(_registry: &BrowserRegistry, decision: &RouteDecision) -> 
     }
 }
 
+/// What a host needs to start the routed browser itself instead of letting
+/// SuperSurfer spawn it. The macOS app launches through `NSWorkspace`, which
+/// avoids a `/usr/bin/open` process per link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchPlan {
+    pub app_path: String,
+    pub url: String,
+    /// Extra command-line arguments (profile, private window). When empty the
+    /// URL can simply be handed to the browser, running or not.
+    pub args: Vec<String>,
+}
+
+/// Build the launch for a decision without starting anything. Applies the
+/// same URL gate as [`launch_browser`].
+pub fn launch_plan(decision: &RouteDecision) -> Result<LaunchPlan> {
+    ensure_launchable_url(&decision.launch_url)?;
+    let app_path = decision
+        .app_path
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("no application path resolved for browser launch"))?;
+    Ok(LaunchPlan {
+        app_path,
+        url: decision.launch_url.clone(),
+        args: browser_args(decision),
+    })
+}
+
+/// Profile and private-window arguments for the routed browser.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn browser_args(decision: &RouteDecision) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(profile_dir) = chromium_profile_arg(
+        decision.browser_id.as_str(),
+        decision.profile_directory.as_deref(),
+    ) {
+        args.push(profile_dir);
+    } else if let Some(profile) = decision.profile.as_deref() {
+        if is_gecko_browser(decision.browser_id.as_str()) {
+            args.push("-P".to_string());
+            args.push(profile.to_string());
+        }
+    }
+    if decision.private {
+        // Safari and other non-Chromium/Gecko browsers have no documented
+        // command-line private-mode flag, so only pass one where it works.
+        if let Some(flag) = private_window_flag(decision.browser_id.as_str()) {
+            args.push(flag.to_string());
+        }
+    }
+    args
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn browser_args(_decision: &RouteDecision) -> Vec<String> {
+    Vec::new()
+}
+
 /// Final defense-in-depth gate before handing a URL to the browser: whatever
 /// routing, config rewrite rules, or URL cleaning produced, only ever launch
 /// web URLs and local files. Earlier layers already filter their own inputs,
@@ -90,25 +147,7 @@ fn launch_linux(exec: &str, decision: &RouteDecision) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn launch_macos(app_path: &str, decision: &RouteDecision) -> Result<()> {
-    let mut browser_args = Vec::new();
-    if let Some(profile_dir) = chromium_profile_arg(
-        decision.browser_id.as_str(),
-        decision.profile_directory.as_deref(),
-    ) {
-        browser_args.push(profile_dir);
-    } else if let Some(profile) = decision.profile.as_deref() {
-        if is_gecko_browser(decision.browser_id.as_str()) {
-            browser_args.push("-P".to_string());
-            browser_args.push(profile.to_string());
-        }
-    }
-    if decision.private {
-        // Safari and other non-Chromium/Gecko browsers have no documented
-        // command-line private-mode flag, so only pass one where it works.
-        if let Some(flag) = private_window_flag(decision.browser_id.as_str()) {
-            browser_args.push(flag.to_string());
-        }
-    }
+    let extra_args = browser_args(decision);
 
     // Always go through Launch Services (`open`), never the inner binary.
     // Spawning Edge/Chrome directly makes SuperSurfer the TCC responsible
@@ -116,11 +155,7 @@ fn launch_macos(app_path: &str, decision: &RouteDecision) -> Result<()> {
     // browser updater touches its own bundle. `open` is short-lived, so
     // waiting on it is fine.
     let status = Command::new("open")
-        .args(macos_open_args(
-            app_path,
-            &decision.launch_url,
-            &browser_args,
-        ))
+        .args(macos_open_args(app_path, &decision.launch_url, &extra_args))
         .status()
         .context("failed to launch browser")?;
     status
@@ -231,9 +266,70 @@ fn private_window_flag(browser_id: &str) -> Option<&'static str> {
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 mod tests {
-    use super::{ensure_launchable_url, macos_open_args, private_window_flag, spawn_gui_process};
+    use super::{
+        ensure_launchable_url, launch_plan, macos_open_args, private_window_flag, spawn_gui_process,
+    };
+    use crate::routing::{RouteDecision, RouteSource};
     use std::process::Command;
     use std::time::{Duration, Instant};
+
+    fn decision(browser_id: &str, url: &str) -> RouteDecision {
+        RouteDecision {
+            input_url: url.to_string(),
+            routed_url: url.to_string(),
+            launch_url: url.to_string(),
+            browser_id: browser_id.to_string(),
+            browser: browser_id.to_string(),
+            profile: None,
+            profile_directory: None,
+            private: false,
+            matched_handler: true,
+            fallback: false,
+            app_path: Some(format!("/Applications/{browser_id}.app")),
+            source: RouteSource::Default,
+            rule_domain: None,
+        }
+    }
+
+    #[test]
+    fn launch_plan_without_profile_needs_no_arguments() {
+        let plan = launch_plan(&decision("chrome", "https://example.com/")).unwrap();
+        assert_eq!(plan.app_path, "/Applications/chrome.app");
+        assert_eq!(plan.url, "https://example.com/");
+        assert!(plan.args.is_empty());
+    }
+
+    #[test]
+    fn launch_plan_carries_profile_and_private_flags() {
+        let mut chrome = decision("chrome", "https://example.com/");
+        chrome.profile = Some("Work".to_string());
+        chrome.profile_directory = Some("Profile 2".to_string());
+        chrome.private = true;
+        assert_eq!(
+            launch_plan(&chrome).unwrap().args,
+            ["--profile-directory=Profile 2", "--incognito"]
+        );
+
+        let mut firefox = decision("firefox", "https://example.com/");
+        firefox.profile = Some("Work".to_string());
+        assert_eq!(launch_plan(&firefox).unwrap().args, ["-P", "Work"]);
+
+        // Safari has neither profiles nor a private flag on the command line.
+        let mut safari = decision("safari", "https://example.com/");
+        safari.profile = Some("Work".to_string());
+        safari.private = true;
+        assert!(launch_plan(&safari).unwrap().args.is_empty());
+    }
+
+    #[test]
+    fn launch_plan_applies_the_launch_gate() {
+        assert!(launch_plan(&decision("chrome", "javascript:alert(1)")).is_err());
+        assert!(launch_plan(&decision("chrome", "file://fileserver/share/x.html")).is_err());
+
+        let mut homeless = decision("chrome", "https://example.com/");
+        homeless.app_path = None;
+        assert!(launch_plan(&homeless).is_err());
+    }
 
     #[test]
     fn private_flag_is_browser_specific() {

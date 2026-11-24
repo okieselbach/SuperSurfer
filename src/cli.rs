@@ -3,7 +3,8 @@ use crate::context::{Context, Opener};
 use crate::logging;
 use crate::platform;
 use crate::preflight;
-use crate::routing::Router;
+use crate::routing::{RouteSource, Router};
+use crate::rules::{Rule, RuleSet};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -51,6 +52,30 @@ pub enum Commands {
         #[command(subcommand)]
         command: ResolveCommands,
     },
+    /// Saved rules in rules.json (list, add, remove)
+    Rules {
+        #[command(subcommand)]
+        command: Option<RulesCommands>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RulesCommands {
+    /// List saved rules
+    List,
+    /// Always open a domain and its subdomains in a browser
+    Add {
+        /// Domain or link, e.g. github.com
+        domain: String,
+        /// Browser as in config.js, e.g. edge or chrome:Work
+        browser: String,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        private: bool,
+    },
+    /// Remove the saved rule for a domain
+    Remove { domain: String },
 }
 
 #[derive(Subcommand)]
@@ -66,7 +91,13 @@ pub enum ResolveCommands {
 }
 
 pub fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    run_with_args(std::env::args().skip(1).collect())
+}
+
+/// Run the command line with an explicit argument list (without the program
+/// name). The macOS app calls this through the C interface, because its own
+/// process arguments are not always the ones meant for SuperSurfer.
+pub fn run_with_args(args: Vec<String>) -> Result<()> {
     // Rewrite an old `"exe" "%1"` registration before this process handles
     // arguments. A URL that breaks out of those quotes is already in argv for
     // this launch; the rewrite stops the next one.
@@ -100,7 +131,7 @@ pub fn run() -> Result<()> {
         return crate::bootstrap::welcome(fresh_bootstrap);
     }
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(std::iter::once("supersurfer".to_string()).chain(args));
     match cli.command {
         Commands::Init { register, force } => cmd_init(register, force),
         Commands::Doctor => cmd_doctor(),
@@ -109,6 +140,7 @@ pub fn run() -> Result<()> {
         Commands::UpdateRules => cmd_update_rules(),
         Commands::Logs { lines } => logging::tail_logs(lines),
         Commands::Resolve { command } => cmd_resolve(command),
+        Commands::Rules { command } => cmd_rules(command.unwrap_or(RulesCommands::List)),
     }
 }
 
@@ -218,6 +250,18 @@ fn cmd_doctor() -> Result<()> {
                 );
             }
         }
+    }
+    println!();
+    let rules_path = RuleSet::default_path()?;
+    println!("Saved rules: {}", rules_path.display());
+    match RuleSet::load(&rules_path) {
+        Ok(rules) if rules.is_empty() => println!("  (none)"),
+        Ok(rules) => {
+            for rule in rules.rules() {
+                println!("  - {}", describe_rule(rule));
+            }
+        }
+        Err(err) => println!("  error: {err:#}"),
     }
     println!();
     println!(
@@ -368,6 +412,12 @@ fn cmd_test(url: &str, opener: Option<&str>, open: bool) -> Result<()> {
     if let Some(profile) = &decision.profile {
         println!("profile:  {profile}");
     }
+    if decision.source == RouteSource::Rule {
+        println!(
+            "rule:     {} (rules.json)",
+            decision.rule_domain.as_deref().unwrap_or("?")
+        );
+    }
     if decision.fallback {
         println!("note:     fell back to defaultBrowser");
     }
@@ -375,6 +425,74 @@ fn cmd_test(url: &str, opener: Option<&str>, open: bool) -> Result<()> {
         println!("opened in {}", decision.browser);
     } else {
         println!("(dry run — pass --open to launch)");
+    }
+    Ok(())
+}
+
+fn describe_rule(rule: &Rule) -> String {
+    let mut text = format!("{} -> {}", rule.domain, rule.browser_spec());
+    if rule.private {
+        text.push_str(" (private window)");
+    }
+    text
+}
+
+fn cmd_rules(command: RulesCommands) -> Result<()> {
+    let path = RuleSet::default_path()?;
+    // Strict load on purpose: a file that cannot be parsed is reported, never
+    // silently replaced by `add` or `remove`.
+    let mut rules = RuleSet::load(&path)?;
+    match command {
+        RulesCommands::List => {
+            if rules.is_empty() {
+                println!("No saved rules in {}", path.display());
+                println!("Add one: supersurfer rules add <domain> <browser>");
+            } else {
+                for rule in rules.rules() {
+                    println!("{}", describe_rule(rule));
+                }
+            }
+        }
+        RulesCommands::Add {
+            domain,
+            browser,
+            profile,
+            private,
+        } => {
+            let (browser_id, spec_profile) = crate::routing::parse_browser_spec(&browser);
+            let profile = profile.or(spec_profile);
+            // A rule for a browser that is not installed would only ever fall
+            // back to defaultBrowser, so catch the typo here.
+            let registry = crate::browser::registry::BrowserRegistry::discover_fresh()?;
+            if registry.resolve(&browser_id, None).is_err() {
+                let installed = registry
+                    .list()
+                    .iter()
+                    .map(|install| install.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!("unknown browser '{browser_id}'. Detected browsers: {installed}");
+            }
+            rules.upsert(Rule {
+                domain,
+                browser: browser_id,
+                profile,
+                private,
+            })?;
+            rules.save(&path)?;
+            println!("Saved to {}", path.display());
+            for rule in rules.rules() {
+                println!("  {}", describe_rule(rule));
+            }
+        }
+        RulesCommands::Remove { domain } => {
+            if rules.remove(&domain) {
+                rules.save(&path)?;
+                println!("Removed the rule for {domain}.");
+            } else {
+                println!("No saved rule for {domain}.");
+            }
+        }
     }
     Ok(())
 }

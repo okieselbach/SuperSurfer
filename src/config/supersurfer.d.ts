@@ -9,6 +9,11 @@ export interface Opener {
 export interface Context {
   opener?: Opener;
   platform: Platform;
+  /**
+   * Modifier keys held while the link was clicked (`alt` is ⌥ Option, `cmd`
+   * is ⌘ Command). Reported by the macOS menu bar app; always `false` on
+   * Windows and Linux and when routing from the command line.
+   */
   modifiers: {
     shift: boolean;
     alt: boolean;
