@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    # The second branch is temporary: it builds Dock Click on a Mac while it
-    # is being written, and goes again before the branch is done.
-    branches: [main, claude/youthful-sagan-j5h2me]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -178,31 +176,6 @@ jobs:
           name: supersurfer-macos
           path: dist/SuperSurfer.app.zip
           if-no-files-found: error
-
-  # TEMPORARY, goes again with the branch trigger above: the same app and
-  # tests on the newest macOS image, to see Dock Click there as well.
-  try-macos-26:
-    name: Try macOS 26 (temporary)
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build app bundle
-        run: bash packaging/macos/build-app.sh
-
-      - name: Smoke test
-        continue-on-error: true
-        run: bash packaging/macos/smoke-test.sh dist/SuperSurfer.app
-
-      - name: Dock click test
-        timeout-minutes: 15
-        run: bash packaging/macos/dock-click-test.sh dist/SuperSurfer.app
 
   release:
     name: GitHub Release
