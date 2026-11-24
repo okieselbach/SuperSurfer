@@ -385,16 +385,15 @@ func preflight() -> Never {
         say("Accessibility shows no app icons in the Dock")
         exit(77)
     }
-    say("screens: \(NSScreen.screens.map { $0.frame })")
-    for icon in icons {
-        let centre = icon.centre.map { "\(Int($0.x)),\(Int($0.y))" } ?? "?"
-        say("dock:  \(icon.title) at \(centre)  \(icon.url?.path ?? "-")")
-    }
+    // What Dock Click itself relies on: asked what is at a point, the Dock
+    // answers with the icon there.
     var hit: AXUIElement?
     let result = AXUIElementCopyElementAtPosition(dock, Float(spot.x), Float(spot.y), &hit)
-    let role = hit.flatMap { text($0, kAXRoleAttribute) } ?? "-"
-    let subrole = hit.flatMap { text($0, kAXSubroleAttribute) } ?? "-"
-    say("hit test on \(first.title): error \(result.rawValue), role \(role), subrole \(subrole)")
+    let subrole = hit.flatMap { text($0, kAXSubroleAttribute) } ?? "nothing"
+    guard result == .success, subrole == "AXApplicationDockItem" else {
+        stop("asked what is at the \(first.title) icon, the Dock answers \(subrole) (error \(result.rawValue))")
+    }
+    say("the Dock shows \(icons.count) app icons and answers for the one at \(Int(spot.x)),\(Int(spot.y))")
     exit(0)
 }
 

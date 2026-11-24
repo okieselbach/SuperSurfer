@@ -140,7 +140,7 @@ Clicking the Dock icon of the app you are already in does nothing on macOS. **Do
 
 This has nothing to do with routing links. It is here because SuperSurfer is loaded anyway, which is cheaper than one more menu bar utility. While it is off, nothing is installed and no permission is needed.
 
-Only a plain click counts, and only on the icon of an app that was in front *before* the click. Everything else stays with the Dock: a click on another app's icon switches to that app, a long press opens the icon's menu, and a click with ⌘, ⌥, ⌃ or ⇧ held keeps the meaning macOS gives it. A double click ends where it began: its second click never puts anything away, and brings back what the first one did. An app with no window on screen is left alone too, because there the click is how you ask for one.
+Only a plain click counts, and only on the icon of an app that was in front *before* the click. Everything else stays with the Dock: a click on another app's icon switches to that app, a long press opens the icon's menu, and a click with ⌘, ⌥, ⌃ or ⇧ held keeps the meaning macOS gives it. A double click ends where it began: its second click never puts anything away, and brings back what the first one put away. An app with no window on screen is left alone too, because there the click is how you ask for one.
 
 **Permission.** The first time you choose *Hide App* or *Minimize Windows*, macOS asks for the Accessibility permission (System Settings → Privacy & Security → Accessibility). SuperSurfer needs it to ask the Dock which icon is under the pointer and to minimize another app's windows. It works from the next click. Until the permission is there, the menu entry carries a ⚠︎ and clicks behave as always.
 
