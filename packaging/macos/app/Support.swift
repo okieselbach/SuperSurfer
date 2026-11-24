@@ -1,0 +1,126 @@
+import Cocoa
+
+/// The app has a handful of strings, so English and German sit side by side
+/// instead of in .lproj bundles: the bundle stays a plain swiftc build with
+/// no resource step.
+func tr(_ english: String, _ german: String) -> String {
+    return prefersGerman ? german : english
+}
+
+private let prefersGerman: Bool = {
+    let language = Locale.preferredLanguages.first ?? "en"
+    return language.lowercased().hasPrefix("de")
+}()
+
+enum Format {
+    /// A link without its scheme, shortened in the middle so a menu stays narrow.
+    static func shortURL(_ text: String, limit: Int = 64) -> String {
+        var shown = text
+        for scheme in ["https://", "http://"] where shown.hasPrefix(scheme) {
+            shown = String(shown.dropFirst(scheme.count))
+        }
+        if shown.count <= limit {
+            return shown
+        }
+        let head = shown.prefix(limit * 2 / 3)
+        let tail = shown.suffix(limit / 3 - 1)
+        return "\(head)…\(tail)"
+    }
+
+    static func browserLabel(_ name: String, profile: String?) -> String {
+        if let profile = profile, !profile.isEmpty {
+            return "\(name) (\(profile))"
+        }
+        return name
+    }
+
+    static func milliseconds(_ value: Double) -> String {
+        return String(format: value < 10 ? "%.2f ms" : "%.0f ms", value)
+    }
+}
+
+enum Clipboard {
+    static func copy(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    static func text() -> String? {
+        return NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// A menu item that runs a closure. The item is its own target, so no
+/// controller has to stay alive or expose selectors for it.
+final class ActionMenuItem: NSMenuItem {
+    private var handler: (() -> Void)?
+
+    convenience init(_ title: String, handler: @escaping () -> Void) {
+        self.init(title: title, action: #selector(runHandler), keyEquivalent: "")
+        self.handler = handler
+        self.target = self
+    }
+
+    @objc private func runHandler() {
+        handler?()
+    }
+}
+
+enum MenuItems {
+    /// Greyed-out text: an item without an action is disabled automatically.
+    static func note(_ text: String) -> NSMenuItem {
+        return NSMenuItem(title: text, action: nil, keyEquivalent: "")
+    }
+
+    static func submenu(_ title: String, items: [NSMenuItem]) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        for entry in items {
+            menu.addItem(entry)
+        }
+        item.submenu = menu
+        return item
+    }
+
+    /// One entry per browser with its profiles indented below it. Choosing the
+    /// browser itself opens whatever profile it used last.
+    static func browsers(
+        _ browsers: [BrowserInfo],
+        checkedBrowserId: String? = nil,
+        checkedProfile: String? = nil,
+        onPick: @escaping (BrowserInfo, String?) -> Void
+    ) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        for browser in browsers {
+            let isChecked = browser.id == checkedBrowserId
+            let item = ActionMenuItem(browser.name) { onPick(browser, nil) }
+            item.image = appIcon(at: browser.appPath)
+            if isChecked && checkedProfile == nil {
+                item.state = .on
+            }
+            items.append(item)
+
+            for profile in browser.profiles {
+                let entry = ActionMenuItem(profile) { onPick(browser, profile) }
+                entry.indentationLevel = 2
+                if isChecked, let wanted = checkedProfile,
+                   wanted.caseInsensitiveCompare(profile) == .orderedSame {
+                    entry.state = .on
+                }
+                items.append(entry)
+            }
+        }
+        if items.isEmpty {
+            items.append(note(tr("No browsers found", "Keine Browser gefunden")))
+        }
+        return items
+    }
+
+    private static func appIcon(at path: String) -> NSImage {
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        icon.size = NSSize(width: 16, height: 16)
+        return icon
+    }
+}

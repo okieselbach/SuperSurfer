@@ -5,6 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -147,7 +148,14 @@ jobs:
         run: bash packaging/macos/build-app.sh
 
       - name: Verify artifact
-        run: test -f dist/SuperSurfer.app/Contents/MacOS/supersurfer-bin
+        run: |
+          test -x dist/SuperSurfer.app/Contents/MacOS/SuperSurfer
+          test -x dist/SuperSurfer.app/Contents/MacOS/set-default
+
+      # Starts the built app, sends it a link the way macOS does, and checks
+      # that it routed it and stayed loaded.
+      - name: Smoke test
+        run: bash packaging/macos/smoke-test.sh dist/SuperSurfer.app
 
       - name: Archive app bundle
         run: ditto -c -k --sequesterRsrc --keepParent dist/SuperSurfer.app dist/SuperSurfer.app.zip

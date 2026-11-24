@@ -55,6 +55,7 @@ pub fn register_default_browser() -> Result<()> {
     })?;
 
     register_with_launch_services(&app)?;
+    start_resident_app(&app);
 
     if try_set_default_with_workspace(&app)? {
         println!("Set SuperSurfer as default browser for http and https.");
@@ -177,6 +178,22 @@ fn register_with_launch_services(app: &Path) -> Result<()> {
         anyhow::bail!("lsregister exited with status {status}");
     }
     Ok(())
+}
+
+/// SuperSurfer.app stays loaded so a link click is answered without a cold
+/// start. Bring it up now (in the background, no window) instead of waiting
+/// for the first click; a running instance just stays as it is.
+fn start_resident_app(app: &Path) {
+    let started = Command::new("/usr/bin/open")
+        .arg("-g")
+        .arg("-a")
+        .arg(app)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if started {
+        println!("SuperSurfer is running in the menu bar.");
+    }
 }
 
 fn try_set_default_with_workspace(app: &Path) -> Result<bool> {
