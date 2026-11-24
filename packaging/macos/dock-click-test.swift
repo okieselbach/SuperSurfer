@@ -17,6 +17,14 @@ func say(_ text: String) {
     fflush(stdout)
 }
 
+// A test that drives the screen must not hang. No question to another app
+// waits longer than this, and no run takes longer than five minutes.
+AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.5)
+DispatchQueue.global().asyncAfter(deadline: .now() + 300) {
+    say("FAIL  not finished after five minutes")
+    exit(1)
+}
+
 func stop(_ why: String) -> Never {
     say("FAIL  \(why)")
     exit(1)
@@ -210,7 +218,7 @@ func cover(_ app: NSRunningApplication) -> (panel: NSPanel, spot: CGPoint) {
     guard let spot = icon(of: app)?.centre, let primary = NSScreen.screens.first else {
         stop("no Dock icon found for \(name(app))")
     }
-    _ = NSApplication.shared
+    NSApplication.shared.setActivationPolicy(.accessory)
     let side: CGFloat = 60
     // Accessibility counts from the top of the main display, AppKit from its
     // bottom.
@@ -855,13 +863,13 @@ func probeShowDesktop() {
 func describe(_ element: AXUIElement) -> String {
     var names: CFArray?
     AXUIElementCopyAttributeNames(element, &names)
-    let attributes = (names as? [String]) ?? []
-    var parts: [String] = []
-    for attribute in attributes {
-        if let found = value(element, attribute) as? String, !found.isEmpty {
-            parts.append("\(attribute)=\(found)")
-        } else if let found = value(element, attribute) as? Bool {
-            parts.append("\(attribute)=\(found)")
+    var parts: [String] = ["attributes: \(((names as? [String]) ?? []).joined(separator: ","))"]
+    for attribute in ["AXTitle", "AXSubrole", "AXIdentifier", "AXDescription", "AXDocument", "AXMain", "AXMinimized"] {
+        let found = value(element, attribute)
+        if let string = found as? String, !string.isEmpty {
+            parts.append("\(attribute)=\(string)")
+        } else if let flag = found as? Bool {
+            parts.append("\(attribute)=\(flag)")
         }
     }
     return parts.joined(separator: "; ")
