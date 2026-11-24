@@ -158,20 +158,4 @@ if [ "$STATUS" -ne 0 ]; then
   exit "$STATUS"
 fi
 
-# TEMPORARY: how much room do the settle time and the click length have?
-echo "== probe: how long a press is still a click"
-"$DRIVER" probe-hold || true
-for MODE in hide minimize; do
-  for SETTLE in 0 0.02 0.05 0.12; do
-    echo "== probe: $MODE with settle $SETTLE"
-    TRACE="$SCRATCH/trace-probe.log"
-    SUPERSURFER_DOCK_CLICK_SETTLE="$SETTLE" SUPERSURFER_DOCK_CLICK="$MODE" HOME="$SCRATCH" "$BIN" --resident 2>"$TRACE" &
-    PID=$!
-    wait_for 30 app_is_running dev.supersurfer.app
-    sleep 1
-    "$DRIVER" "probe-$MODE" || true
-    stop_app
-  done
-done
-
 echo "dock click test passed"
