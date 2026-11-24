@@ -201,11 +201,11 @@ jobs:
 
           **Windows:** run \`supersurfer.exe init --register\`, then set SuperSurfer as default under Settings → Apps → Default apps.
 
-          **macOS:** unzip into \`/Applications\`, then \`/Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer register\`.
+          **macOS:** unzip into \`/Applications\`, then \`/Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer register\`. The app is not notarized yet, so macOS refuses a downloaded copy until you run \`xattr -cr /Applications/SuperSurfer.app\`.
 
           **Linux:** extract the tarball for your arch and run \`./install.sh\`.
 
-          See the [manual](https://github.com/Jabe/SuperSurfer/blob/${tag}/docs/manual.md).
+          See the [manual](https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/docs/manual.md).
           EOF
           gh release create "$tag" \
             artifacts/supersurfer-windows/supersurfer.exe \
