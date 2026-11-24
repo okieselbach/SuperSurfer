@@ -56,7 +56,10 @@ swiftc -O -wmo -swift-version 5 \
   -o "$MACOS/SuperSurfer"
 chmod +x "$MACOS/SuperSurfer"
 
+# The helper uses an API that arrived with macOS 12. Without an explicit
+# target it would only run on the build machine's macOS version or newer.
 swiftc packaging/macos/set-default.swift \
+  -target "$(uname -m)-apple-macos12.0" \
   -o "$MACOS/set-default" \
   -framework AppKit \
   -framework Foundation \

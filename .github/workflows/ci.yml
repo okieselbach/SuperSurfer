@@ -131,7 +131,8 @@ jobs:
 
   build-macos:
     name: Build macOS
-    runs-on: macos-14
+    # GitHub retired the macos-14 image on 2 November 2026.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
