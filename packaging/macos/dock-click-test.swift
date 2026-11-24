@@ -11,6 +11,12 @@ import Cocoa
 //   dock-click-test minimize    SuperSurfer runs with Dock Click on "minimize"
 //   dock-click-test menu        SuperSurfer runs with Dock Click off; the
 //                               test switches it on and off in the menu
+//
+// and for dock-shortcut-test.sh, which tests the Dock shortcuts for browser
+// profiles:
+//
+//   dock-click-test shortcuts <edge|chrome> <scratch HOME> <SuperSurfer.app>
+//                             [dock] [start]
 
 func say(_ text: String) {
     print(text)
@@ -311,7 +317,10 @@ func statusMenuEntries() -> [AXUIElement] {
 }
 
 func dockClickEntry() -> AXUIElement? {
-    return statusMenuEntries().first { (text($0, kAXTitleAttribute) ?? "").contains("Dock") }
+    return statusMenuEntries().first { entry in
+        let title = text(entry, kAXTitleAttribute) ?? ""
+        return title.contains("Dock Click") || title.contains("Dock-Klick")
+    }
 }
 
 /// Opens the menu with a click on the icon and the Dock Click submenu with a
@@ -850,7 +859,468 @@ func testMinimize() {
     try? FileManager.default.removeItem(at: documents)
 }
 
+// MARK: - Dock shortcuts for browser profiles
+
+struct TestBrowser {
+    let id: String
+    /// As SuperSurfer's menu lists it.
+    let name: String
+    /// What its shortcuts are named after.
+    let shortName: String
+    let appPath: String
+    let binary: String
+    let bundleID: String
+    /// Where it keeps its profiles, below Library/Application Support.
+    let dataFolder: String
+}
+
+let testBrowsers = [
+    TestBrowser(
+        id: "edge",
+        name: "Microsoft Edge",
+        shortName: "Edge",
+        appPath: "/Applications/Microsoft Edge.app",
+        binary: "Microsoft Edge",
+        bundleID: "com.microsoft.edgemac",
+        dataFolder: "Microsoft Edge"
+    ),
+    TestBrowser(
+        id: "chrome",
+        name: "Google Chrome",
+        shortName: "Chrome",
+        appPath: "/Applications/Google Chrome.app",
+        binary: "Google Chrome",
+        bundleID: "com.google.Chrome",
+        dataFolder: "Google/Chrome"
+    ),
+]
+
+func axWindows(_ app: NSRunningApplication) -> [AXUIElement] {
+    return elements(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute)
+}
+
+func isMain(_ window: AXUIElement) -> Bool {
+    return (value(window, kAXMainAttribute) as? Bool) == true
+}
+
+/// The title of the app's main window, which is the one in front of its
+/// others.
+func mainWindowTitle(_ app: NSRunningApplication) -> String {
+    return axWindows(app).first(where: isMain).flatMap { text($0, kAXTitleAttribute) } ?? ""
+}
+
+func window(of app: NSRunningApplication, showing page: String) -> AXUIElement? {
+    return axWindows(app).first { (text($0, kAXTitleAttribute) ?? "").contains(page) }
+}
+
+func outputOf(_ tool: String, _ arguments: [String]) -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: tool)
+    process.arguments = arguments
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        return ""
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// Clicks its way down SuperSurfer's menu, one entry per step. A click on an
+/// entry with a submenu opens it and keeps the menu up, so the next step
+/// finds its entries. False, with the menu closed again, if a step finds
+/// nothing to click.
+func clickDownMenu(_ steps: [([AXUIElement]) -> AXUIElement?]) -> Bool {
+    guard let item = statusItem(), let icon = middle(of: item) else {
+        stop("SuperSurfer has no icon in the menu bar")
+    }
+    post(.mouseMoved, at: icon)
+    pause(0.3)
+    press(at: icon)
+    pause(0.8)
+
+    var entries: () -> [AXUIElement] = { statusMenuEntries() }
+    var from: CGPoint?
+    for step in steps {
+        var target: AXUIElement?
+        var spot: CGPoint?
+        let found = waitUntil(4) {
+            target = step(entries())
+            spot = target.flatMap(middle)
+            return spot != nil
+        }
+        guard found, let entry = target, let point = spot else {
+            for _ in 1...3 {
+                pressEscape()
+            }
+            return false
+        }
+        // Sideways first, then up or down, so the pointer never crosses
+        // another entry of the menu it comes from on its way.
+        if let last = from {
+            post(.mouseMoved, at: CGPoint(x: point.x, y: last.y))
+            pause(0.3)
+        }
+        post(.mouseMoved, at: point)
+        pause(0.3)
+        press(at: point)
+        pause(0.8)
+        from = point
+        entries = { elements(entry, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) } }
+    }
+    return true
+}
+
+/// The "Dock Shortcuts" entry of SuperSurfer's menu, English or German.
+func dockShortcutsEntry(_ entries: [AXUIElement]) -> AXUIElement? {
+    return entries.first { entry in
+        let title = text(entry, kAXTitleAttribute) ?? ""
+        return title.contains("Dock Shortcuts") || title.contains("Dock-Verknüpfungen")
+    }
+}
+
+/// The entry for a profile, below the line that names its browser.
+func profileEntry(_ browser: String, _ profile: String) -> ([AXUIElement]) -> AXUIElement? {
+    return { entries in
+        let titles = entries.map { text($0, kAXTitleAttribute) ?? "" }
+        guard let header = titles.firstIndex(of: browser) else {
+            return nil
+        }
+        for index in titles.indices where index > header && titles[index] == profile {
+            return entries[index]
+        }
+        return nil
+    }
+}
+
+func entryTitled(_ wanted: [String]) -> ([AXUIElement]) -> AXUIElement? {
+    return { entries in entries.first { wanted.contains(text($0, kAXTitleAttribute) ?? "") } }
+}
+
+/// SuperSurfer reads a browser's profiles when its menu opens, and keeps
+/// what it read for a quarter of a minute. A profile made a moment ago may
+/// not be in the menu yet, so this tries more than once.
+func chooseInDockShortcuts(_ steps: [([AXUIElement]) -> AXUIElement?], what: String) {
+    for attempt in 1...4 {
+        if clickDownMenu([dockShortcutsEntry] + steps) {
+            return
+        }
+        say("      \(what) is not in the menu (attempt \(attempt))")
+        pause(6)
+    }
+    stop("SuperSurfer's menu has no \(what) under Dock Shortcuts")
+}
+
+func testShortcuts(_ browser: TestBrowser, home: String, superSurfer: String, onDock: Bool, startToo: Bool) {
+    let binary = browser.appPath + "/Contents/MacOS/" + browser.binary
+    guard FileManager.default.fileExists(atPath: binary) else {
+        say("skipped: \(browser.name) is not installed")
+        return
+    }
+    let data = home + "/Library/Application Support/" + browser.dataFolder
+    let shortcuts = home + "/Applications/SuperSurfer Shortcuts"
+    let pages = home + "/pages"
+    try? FileManager.default.createDirectory(atPath: pages, withIntermediateDirectories: true)
+
+    func running() -> NSRunningApplication? {
+        return NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID)
+            .first { $0.activationPolicy == .regular && !$0.isTerminated }
+    }
+    func quit() {
+        for instance in NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID) {
+            instance.terminate()
+        }
+        if !waitUntil(10, { running() == nil }) {
+            for instance in NSRunningApplication.runningApplications(withBundleIdentifier: browser.bundleID) {
+                instance.forceTerminate()
+            }
+            _ = waitUntil(10) { running() == nil }
+        }
+        pause(1)
+    }
+
+    // Three profiles, each with one window that shows a page of its own. The
+    // title of the page tells whose window is in front. The profiles are
+    // kept below the scratch HOME, where SuperSurfer looks for them.
+    let profiles = [("Default", "sst-first"), ("Profile 1", "sst-second"), ("Profile 2", "sst-third")]
+    for (directory, page) in profiles {
+        let file = pages + "/\(page).html"
+        try? "<!doctype html><title>\(page)</title><p>\(page)</p>".write(toFile: file, atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = [
+            "--user-data-dir=\(data)", "--profile-directory=\(directory)",
+            "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--use-mock-keychain",
+            URL(fileURLWithPath: file).absoluteString,
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            stop("\(browser.name) did not start: \(error.localizedDescription)")
+        }
+        let opened = waitUntil(40) {
+            running().map { window(of: $0, showing: page) != nil } ?? false
+        }
+        if !opened {
+            stop("\(browser.name) shows no window with \(page) for its profile folder \(directory)")
+        }
+        pause(1)
+    }
+    guard let app = running() else {
+        stop("\(browser.name) is not running")
+    }
+
+    // The browser writes the file with its profiles a while after it made
+    // them.
+    var names: [String: String] = [:]
+    let listed = waitUntil(60) {
+        guard let raw = FileManager.default.contents(atPath: data + "/Local State"),
+              let json = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any],
+              let profile = json["profile"] as? [String: Any],
+              let cache = profile["info_cache"] as? [String: Any] else {
+            return false
+        }
+        names = [:]
+        for (directory, info) in cache {
+            names[directory] = ((info as? [String: Any])?["name"] as? String) ?? directory
+        }
+        return profiles.allSatisfy { names[$0.0] != nil }
+    }
+    let kept = names.sorted { $0.key < $1.key }.map { "\($0.key) is \"\($0.value)\"" }.joined(separator: ", ")
+    say("      \(browser.name) keeps its profiles as: \(kept)")
+    guard listed, let second = names["Profile 1"], let third = names["Profile 2"] else {
+        stop("\(browser.name) did not write its three profiles down")
+    }
+    func bundle(_ profile: String) -> String {
+        return "\(shortcuts)/\(browser.shortName) \(profile).app"
+    }
+
+    say("-- a shortcut is made in SuperSurfer's menu")
+    for profile in [second, third] {
+        chooseInDockShortcuts([profileEntry(browser.name, profile)], what: "\(browser.name), \(profile)")
+        let made = waitUntil(15) {
+            FileManager.default.isExecutableFile(atPath: bundle(profile) + "/Contents/MacOS/shortcut")
+        }
+        if !made {
+            let found = (try? FileManager.default.contentsOfDirectory(atPath: shortcuts)) ?? []
+            stop("no app at \(bundle(profile)); the folder has \(found)")
+        }
+        say("ok    \(browser.shortName) \(profile).app is there")
+        pause(1)
+    }
+    // TEMPORARY
+    dumpIcon(bundle(second))
+    dumpIcon(bundle(third))
+
+    var inDock: String?
+    if onDock {
+        // The real thing for one of them: an icon in the Dock.
+        let entry = "<dict><key>tile-data</key><dict><key>file-data</key><dict>"
+            + "<key>_CFURLString</key><string>\(bundle(second))</string>"
+            + "<key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>"
+        run("/usr/bin/defaults", ["write", "com.apple.dock", "persistent-apps", "-array-add", entry])
+        run("/usr/bin/killall", ["Dock"])
+        let name = "\(browser.shortName) \(second).app"
+        let shown = waitUntil(40) {
+            appIcons().contains { $0.url?.lastPathComponent == name }
+        }
+        if !shown {
+            stop("the Dock does not show \(name); it shows \(appIcons().map { $0.title })")
+        }
+        say("ok    \(name) is in the Dock")
+        inDock = second
+        pause(2)
+    }
+
+    /// A click on the shortcut. Where it is in the Dock that is a click on
+    /// its icon; otherwise Launch Services is asked to start the app, which
+    /// is what the Dock does with the click.
+    func use(_ profile: String) {
+        let name = "\(browser.shortName) \(profile).app"
+        if profile == inDock, let spot = appIcons().first(where: { $0.url?.lastPathComponent == name })?.centre {
+            click(at: spot)
+        } else {
+            lastClick = nil
+            run("/usr/bin/open", [bundle(profile)])
+        }
+    }
+    func inFront(_ page: String) -> Bool {
+        return isInFront(app) && !app.isHidden && mainWindowTitle(app).contains(page)
+    }
+    func calculatorInFront() {
+        _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    }
+
+    say("-- from behind another app the profile's window comes to the front")
+    calculatorInFront()
+    use(second)
+    expect("\(browser.shortName) is in front with the window of \(second)", of: app, within: 20) {
+        inFront("sst-second")
+    }
+    stays("and no window was added", of: app, for: 1.5) {
+        axWindows(app).count == 3 && inFront("sst-second")
+    }
+
+    say("-- the other shortcut brings the other profile's window forward, and back")
+    use(third)
+    expect("the window of \(third) is in front", of: app, within: 20) {
+        inFront("sst-third")
+    }
+    use(second)
+    expect("the window of \(second) is in front again", of: app, within: 20) {
+        inFront("sst-second")
+    }
+    stays("and there are still three windows", of: app, for: 1.5) {
+        axWindows(app).count == 3
+    }
+
+    say("-- a link for a profile without a shortcut is left alone")
+    run("/usr/bin/open", ["-g", "-a", superSurfer, "supersurfer://profile/\(browser.id)/Default"])
+    stays("the window of \(second) stays in front", of: app, for: 3) {
+        inFront("sst-second") && axWindows(app).count == 3
+    }
+
+    say("-- a window that sits in the Dock comes out of it")
+    if let minimized = window(of: app, showing: "sst-third") {
+        AXUIElementSetAttributeValue(minimized, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+    }
+    expect("the window of \(third) is minimized", of: app, within: 10) {
+        minimizedWindows(app) == 1
+    }
+    calculatorInFront()
+    use(third)
+    expect("the window of \(third) is in front", of: app, within: 20) {
+        inFront("sst-third") && minimizedWindows(app) == 0
+    }
+
+    say("-- a hidden browser is shown again")
+    app.hide()
+    expect("\(browser.shortName) is hidden", of: app, within: 10) {
+        app.isHidden
+    }
+    pause(1)
+    use(second)
+    expect("the window of \(second) is in front", of: app, within: 20) {
+        inFront("sst-second")
+    }
+
+    say("-- a profile without a window gets one")
+    if let closing = window(of: app, showing: "sst-third"), let button = value(closing, kAXCloseButtonAttribute) {
+        AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+    }
+    expect("the window of \(third) is closed", of: app, within: 10) {
+        axWindows(app).count == 2
+    }
+    calculatorInFront()
+    use(third)
+    expect("a third window is in front, and it is none of the other two", of: app, within: 30) {
+        let title = mainWindowTitle(app)
+        return isInFront(app) && axWindows(app).count == 3
+            && !title.isEmpty && !title.contains("sst-first") && !title.contains("sst-second")
+    }
+    say("      its title: \(mainWindowTitle(app))")
+
+    say("-- a shortcut is removed in SuperSurfer's menu")
+    chooseInDockShortcuts(
+        [profileEntry(browser.name, third), entryTitled(["Remove Shortcut", "Verknüpfung entfernen"])],
+        what: "\(browser.name), \(third), Remove Shortcut"
+    )
+    let removed = waitUntil(10) { !FileManager.default.fileExists(atPath: bundle(third)) }
+    if !removed {
+        stop("\(bundle(third)) is still there")
+    }
+    say("ok    \(browser.shortName) \(third).app is gone, \(browser.shortName) \(second).app is not")
+    if !FileManager.default.fileExists(atPath: bundle(second)) {
+        stop("\(bundle(second)) is gone as well")
+    }
+
+    quit()
+    if startToo {
+        // SuperSurfer starts the browser the way it does for a link, so with
+        // the profiles the browser really has on this Mac, not with the ones
+        // made above. What can be checked is what it was started with.
+        say("-- a browser that is not running is started with the profile")
+        use(second)
+        var arguments = ""
+        let started = waitUntil(40) {
+            guard let pid = running()?.processIdentifier else {
+                return false
+            }
+            arguments = outputOf("/bin/ps", ["-ww", "-o", "args=", "-p", "\(pid)"])
+            return arguments.contains("--profile-directory=Profile 1")
+        }
+        if !started {
+            stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
+        }
+        say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
+        pause(2)
+        quit()
+    }
+}
+
+/// TEMPORARY: the icon macOS shows for a shortcut, as letters. "@" is one of
+/// the first two badge colours, "o" is white, "." anything else.
+func dumpIcon(_ path: String) {
+    let size = 44
+    guard let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4,
+        hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+    ), let context = NSGraphicsContext(bitmapImageRep: rep) else {
+        return
+    }
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    NSWorkspace.shared.icon(forFile: path).draw(
+        in: NSRect(x: 0, y: 0, width: size, height: size), from: .zero, operation: .sourceOver, fraction: 1
+    )
+    context.flushGraphics()
+    NSGraphicsContext.restoreGraphicsState()
+    let badges: [(CGFloat, CGFloat, CGFloat)] = [(0.00, 0.40, 0.85), (0.11, 0.53, 0.25)]
+    say("ICON \(path)")
+    for y in 0..<size {
+        var line = ""
+        for x in 0..<size {
+            guard let color = rep.colorAt(x: x, y: y) else {
+                line += "?"
+                continue
+            }
+            let red = color.redComponent
+            let green = color.greenComponent
+            let blue = color.blueComponent
+            if color.alphaComponent < 0.3 {
+                line += " "
+            } else if badges.contains(where: { abs($0.0 - red) < 0.08 && abs($0.1 - green) < 0.08 && abs($0.2 - blue) < 0.08 }) {
+                line += "@"
+            } else if red > 0.85 && green > 0.85 && blue > 0.85 {
+                line += "o"
+            } else {
+                line += "."
+            }
+        }
+        say("ICON " + line)
+    }
+}
+
 switch CommandLine.arguments.dropFirst().first {
+case "shortcuts":
+    let arguments = Array(CommandLine.arguments.dropFirst(2))
+    guard arguments.count >= 3, let browser = testBrowsers.first(where: { $0.id == arguments[0] }) else {
+        say("usage: dock-click-test shortcuts <edge|chrome> <scratch HOME> <SuperSurfer.app> [dock] [start]")
+        exit(2)
+    }
+    testShortcuts(
+        browser,
+        home: arguments[1],
+        superSurfer: arguments[2],
+        onDock: arguments.contains("dock"),
+        startToo: arguments.contains("start")
+    )
 case "preflight":
     preflight()
 case "control":
