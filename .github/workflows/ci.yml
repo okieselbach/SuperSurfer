@@ -170,12 +170,6 @@ jobs:
         timeout-minutes: 15
         run: bash packaging/macos/dock-click-test.sh dist/SuperSurfer.app
 
-      # Starts Edge and Chrome with profiles of their own and checks that a
-      # Dock shortcut brings the window of its profile to the front.
-      - name: Dock shortcut test
-        timeout-minutes: 15
-        run: bash packaging/macos/dock-shortcut-test.sh dist/SuperSurfer.app
-
       - name: Archive app bundle
         run: ditto -c -k --sequesterRsrc --keepParent dist/SuperSurfer.app dist/SuperSurfer.app.zip
 
@@ -184,6 +178,30 @@ jobs:
           name: supersurfer-macos
           path: dist/SuperSurfer.app.zip
           if-no-files-found: error
+
+  # Starts Edge and Chrome with profiles of their own and checks that a Dock
+  # shortcut brings the window of its profile to the front. It depends on two
+  # browsers as the runner happens to have them, and one that is slow to
+  # start there should hold up neither a build nor a release. So it has a
+  # job of its own, which nothing waits for, with the app the build made.
+  dock-shortcuts-macos:
+    name: Dock shortcuts (macOS)
+    needs: build-macos
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: supersurfer-macos
+          path: dist
+
+      - name: Unpack app bundle
+        run: ditto -x -k dist/SuperSurfer.app.zip dist
+
+      - name: Dock shortcut test
+        timeout-minutes: 15
+        run: bash packaging/macos/dock-shortcut-test.sh dist/SuperSurfer.app
 
   # TEMPORARY, goes again with the branch trigger above: the same app and
   # tests on the newest macOS image.
