@@ -156,9 +156,9 @@ A double click ends where it began: its second click never puts anything away, a
 
 macOS ties this permission to the app's signature, and releases are not signed with a Developer ID yet. After an update the switch in System Settings still looks on but no longer counts: remove SuperSurfer from that list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
 
-**What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. The window server writes into each click which window it went to, and for a click that did not go to the Dock reading that is all that happens: 0.02 ms on the main thread, measured on GitHub's macOS runners. Only a click on the Dock leads to more: a look at which app is in front, on the main thread, and a question to the Dock about the icon, on a queue of its own with a timeout of 0.4 s. Minimizing and restoring windows runs on a second queue. Neither the main thread nor the queue that routes links ever waits for another app. Between clicks the app is as idle as before.
+**What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. The window server writes into each click which window it went to, and for a click that did not go to the Dock reading that is all that happens: 0.01 to 0.02 ms on the main thread, measured on GitHub's macOS runners, and 0.2 ms in the one run where the machine was busy. Only a click on the Dock leads to more: a look at which app is in front, on the main thread, and a question to the Dock about the icon, on a queue of its own with a timeout of 0.4 s. Minimizing and restoring windows runs on a second queue. Neither the main thread nor the queue that routes links ever waits for another app. Between clicks the app is as idle as before.
 
-**Tested, and not.** `packaging/macos/dock-click-test.sh` clicks real Dock icons and runs in CI on macOS 15. It covers what is listed above except the force click, which a test cannot produce, and the long press and modifier keys, for which only the rules in `--self-test` are checked. Not tested at all: an app with windows on more than one Space (macOS then answers the click by moving to the other Space; Dock Click steps aside if it sees the Space or the app's windows change in time), several displays, and Stage Manager.
+**Tested, and not.** `packaging/macos/dock-click-test.sh` clicks real Dock icons. It runs in CI on macOS 15 and has also passed on GitHub's macOS 26 runner. It covers what is listed above except the force click, which a test cannot produce, and the long press and modifier keys, for which only the rules in `--self-test` are checked. Not tested at all: an app with windows on more than one Space (macOS then answers the click by moving to the other Space; Dock Click steps aside if it sees the Space or the app's windows change in time), several displays, and Stage Manager.
 
 ## Saved rules (`rules.json`)
 
@@ -286,7 +286,7 @@ dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --self-test   # check the Swift/
 bash packaging/macos/smoke-test.sh                            # self-test, then start the app and route a real link
 ```
 
-Dock Click has a test of its own, which clicks real Dock icons and checks what happens to the windows. It needs the Accessibility permission for the terminal it runs in, and the Mac to itself for a minute:
+Dock Click has a test of its own, which clicks real Dock icons and checks what happens to the windows. It needs the Accessibility permission for the terminal it runs in, and the Mac to itself for three minutes:
 
 ```bash
 bash packaging/macos/dock-click-test.sh
