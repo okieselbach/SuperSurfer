@@ -80,14 +80,19 @@ enum ProfileShortcutRules {
         }
     }
 
+    /// What a shortcut writes to the system log when it has to do without
+    /// SuperSurfer. No quotes and nothing a shell would read into it.
+    static let unreachableNote = "A Dock shortcut could not reach SuperSurfer and opens a window of the profile itself."
+
     /// A word for /bin/sh that stands for exactly this text.
     static func shellQuoted(_ text: String) -> String {
         return "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// What a shortcut runs. It asks the copy of SuperSurfer that wrote it,
-    /// then whichever copy macOS knows, and if there is none it opens a
-    /// window of the profile itself, so a shortcut never does nothing.
+    /// then whichever copy macOS knows. If neither can be reached it says so
+    /// in the system log and opens a window of the profile itself, so a
+    /// shortcut never does nothing.
     static func script(link: String, superSurfer: String, browserPath: String, launchArguments: [String]) -> String {
         var direct = ["/usr/bin/open", "-n", "-a", shellQuoted(browserPath)]
         if !launchArguments.isEmpty {
@@ -100,6 +105,7 @@ enum ProfileShortcutRules {
         link=\(shellQuoted(link))
         /usr/bin/open -g -a \(shellQuoted(superSurfer)) "$link" 2>/dev/null && exit 0
         /usr/bin/open -g "$link" 2>/dev/null && exit 0
+        /usr/bin/logger -t SuperSurfer "\(unreachableNote)"
         exec \(direct.joined(separator: " "))
 
         """
@@ -723,10 +729,15 @@ final class ProfileShortcuts {
 
         func openWindow(_ why: String) {
             Launcher.openProfileWindow(appPath: browserPath, arguments: arguments) { error in
+                // An error here need not mean that nothing was started: a
+                // browser that starts itself again while starting is
+                // reported as one that could not be launched.
                 if let error = error {
-                    NSLog("SuperSurfer: %@ could not be opened: %@", shortcut.title, error.localizedDescription)
+                    NSLog("SuperSurfer: %@: macOS reports for the browser: %@", shortcut.title, error.localizedDescription)
+                    ProfileShortcuts.trace("\(shortcut.title): \(why); macOS reports: \(error.localizedDescription)")
+                } else {
+                    ProfileShortcuts.trace("\(shortcut.title): \(why)")
                 }
-                ProfileShortcuts.trace("\(shortcut.title): \(why)")
             }
         }
 
@@ -882,6 +893,7 @@ final class ProfileShortcuts {
             script.hasPrefix("#!/bin/sh\n")
                 && script.contains("\nlink='supersurfer://profile/edge/Profile%201'\n")
                 && script.contains("\n/usr/bin/open -g -a '/Applications/SuperSurfer.app' \"$link\" 2>/dev/null && exit 0\n")
+                && script.contains("\n/usr/bin/logger -t SuperSurfer \"\(Rules.unreachableNote)\"\n")
                 && script.hasSuffix(
                     "\nexec /usr/bin/open -n -a '/Applications/Microsoft Edge.app' --args '--profile-directory=Profile 1'\n"
                 )
