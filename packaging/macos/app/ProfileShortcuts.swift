@@ -697,6 +697,7 @@ final class ProfileShortcuts {
             return
         }
         let asked = ProcessInfo.processInfo.systemUptime
+        ProfileShortcuts.trace("asked for \(target.browser), \(target.directory)")
         queue.async {
             self.show(browser: target.browser, directory: target.directory, engine: engine, asked: asked)
         }
