@@ -553,7 +553,9 @@ final class ProfileShortcuts {
     /// The "Dock Shortcuts" entry of the status menu, built for the state as
     /// it is right now.
     func menuItem(app: AppDelegate) -> NSMenuItem {
-        let browsers = app.engine.shortcuts()?.browsers ?? []
+        let reply = app.engine.shortcuts()
+        let browsers = reply?.browsers ?? []
+        let blocked = reply?.profilesBlocked ?? []
         let existing = ProfileShortcut.all(in: ProfileShortcuts.folder)
         let needsPermission = !existing.isEmpty && !AXIsProcessTrusted()
 
@@ -584,11 +586,22 @@ final class ProfileShortcuts {
                 entries.append(item)
             }
         }
-        if offered == 0 {
+        if offered == 0 && blocked.isEmpty {
             entries.append(MenuItems.note(tr(
                 "No profiles of Edge or Chrome found",
                 "Keine Profile von Edge oder Chrome gefunden"
             )))
+        }
+        if !blocked.isEmpty {
+            // macOS 27 and later: without the profile list there is nothing
+            // to offer. The entry leads to the same explanation as the one
+            // at the top of the menu.
+            entries.append(ActionMenuItem(tr(
+                "⚠︎ Browser profiles cannot be read. Show…",
+                "⚠︎ Browser-Profile sind nicht lesbar. Anzeigen …"
+            )) {
+                app.showProfilesBlocked(blocked)
+            })
         }
 
         // Shortcuts for profiles the list no longer has can still be removed.
