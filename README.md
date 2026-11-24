@@ -186,7 +186,7 @@ Like Dock Click this has nothing to do with routing links, and none of it runs u
 - A shortcut remembers the folder the browser keeps the profile in, so renaming the profile does not break it. Its own name and badge stay as they were: remove it and make it again for new ones.
 - **Remove Shortcut** deletes the app. The Dock keeps a question mark in its place until you drag that out.
 
-**Signed-in profiles.** The *Profiles* menu does not always list a profile under its name. For a profile that is signed in to an account, Chrome shows the account's name, or both, as "Ada (Work)". SuperSurfer looks for those forms, and then for an entry that has the profile's name in it as a word of its own. If no entry fits, or more than one, it opens a new window of the profile instead and writes the entries it saw to the system log:
+**Signed-in profiles.** The *Profiles* menu does not always list a profile under its name. For a profile that is signed in to an account, Chrome shows the account's name, or both, as "Ada (Work)", and a name an organization gave the profile in place of the profile's own. SuperSurfer works out which of these to expect the way Chromium's source does, looks for the other forms after that, and then for an entry that has the profile's name in it as a word of its own. If no entry fits, or more than one, it opens a new window of the profile instead and writes the entries it saw to the system log:
 
 ```bash
 log show --last 5m --predicate 'process == "SuperSurfer"'
@@ -194,7 +194,7 @@ log show --last 5m --predicate 'process == "SuperSurfer"'
 
 **Which browsers.** Edge and Chrome. Their Beta and Canary builds and Chromium have the same menu and are offered as well, untried. Firefox is not offered: it runs every profile as an app of its own, which has its own Dock icon while it runs. Safari is not offered either: its profiles cannot be reached from outside.
 
-**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It runs in CI on macOS 15. Not tested: profiles that are signed in to an account (the rule for their names is checked against made-up data only), a browser in another language, the Beta and Canary builds, and macOS 27.
+**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It runs in CI on macOS 15. Not tested: profiles that are signed in to an account (the rule for their names follows Chromium's source and is checked against made-up data; what Edge does with a Microsoft account is not known), a browser in another language, the Beta and Canary builds, and macOS 27.
 
 ## Saved rules (`rules.json`)
 
