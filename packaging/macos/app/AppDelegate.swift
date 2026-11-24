@@ -141,6 +141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Routing
 
     private func warmUp() {
+        // The first use of the preferences and of the workspace's view of the
+        // frontmost app is slower than later ones. Pay for that now instead
+        // of on the first click.
+        _ = PickerKey.current
+        _ = OpenerInfo.frontmostApplication()
+
         // Loads config.js and the browser list before the first click needs
         // them, and runs first-time setup.
         let engine = self.engine

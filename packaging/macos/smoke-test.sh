@@ -139,7 +139,7 @@ sleep 2
 sed 's/^/timing:  /' "$TRACE"
 
 RSS_KB="$(ps -o rss= -p "$PID" | tr -d ' ')"
-echo "memory:  resident set $(( STARTED_RSS_KB / 1024 )) MB after start, $(( RSS_KB / 1024 )) MB after two links"
+echo "memory:  resident set $(( STARTED_RSS_KB / 1024 )) MB after start, $(( RSS_KB / 1024 )) MB after seven links"
 if command -v footprint >/dev/null 2>&1; then
   # What Activity Monitor shows in its Memory column.
   FOOTPRINT="$(footprint "$PID" 2>/dev/null || true)"
