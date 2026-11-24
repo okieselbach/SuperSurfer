@@ -29,6 +29,8 @@ if anotherInstanceIsRunning() {
     exit(0)
 }
 
+AppDelegate.traceToStderr = residentRequested
+
 let sharedApplication = NSApplication.shared
 let appDelegate = AppDelegate()
 sharedApplication.delegate = appDelegate

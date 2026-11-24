@@ -245,7 +245,7 @@ The bundle holds one executable. The macOS side (URL events, menu bar, picker, l
 The same executable is the command line. Started by Launch Services it becomes the menu bar app; started from a shell it runs the given command and exits. Two flags are for development:
 
 ```bash
-dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --resident    # run the menu bar app from a shell, logs on stderr
+dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --resident    # run the menu bar app from a shell; prints a timing line per link
 dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --self-test   # check the Swift/Rust interface against a scratch HOME
 bash packaging/macos/smoke-test.sh                            # self-test, then start the app and route a real link
 ```

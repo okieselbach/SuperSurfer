@@ -38,7 +38,8 @@ elif [ -f "$CORE_LIBS" ]; then
 else
   NATIVE_LIBS="-liconv -lproc"
 fi
-echo "Linking the core with: $NATIVE_LIBS"
+# swiftc links libSystem itself; naming it again only earns a linker warning.
+NATIVE_LIBS="${NATIVE_LIBS//-lSystem/}"
 
 rm -rf "$APP"
 mkdir -p "$MACOS" "$APP/Contents/Resources"

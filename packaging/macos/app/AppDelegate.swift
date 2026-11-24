@@ -62,6 +62,11 @@ extension ModifierState {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let recentLimit = 10
 
+    /// Set when the app was started with `--resident` from a shell: one line
+    /// per link on stderr, with SuperSurfer's own time and the time the
+    /// browser took to accept the link.
+    static var traceToStderr = false
+
     let engine = EngineBridge()
     private(set) var recents: [RecentLink] = []
     private(set) var configError: String?
@@ -185,7 +190,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let engine = self.engine
         let queue = routeQueue
+        let trace = AppDelegate.traceToStderr
+        if trace, let elapsedMs = elapsedMs {
+            fputs("SuperSurfer: routed \(decision.inputUrl) to \(browser) in \(Format.milliseconds(elapsedMs))\n", stderr)
+        }
+        let handedOver = DispatchTime.now()
         Launcher.open(plan) { error in
+            if trace {
+                let waited = Double(DispatchTime.now().uptimeNanoseconds - handedOver.uptimeNanoseconds) / 1_000_000
+                fputs("SuperSurfer: \(browser) accepted it after \(Format.milliseconds(waited))\n", stderr)
+            }
             guard let error = error else {
                 return
             }

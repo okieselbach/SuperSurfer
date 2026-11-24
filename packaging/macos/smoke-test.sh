@@ -23,6 +23,7 @@ PID=""
 cleanup() {
   if [ -n "$PID" ]; then
     kill "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
   fi
   rm -rf "$SCRATCH"
 }
@@ -84,7 +85,9 @@ if app_is_running com.apple.Safari; then
   SAFARI_WAS_RUNNING=yes
 fi
 
-HOME="$SCRATCH" "$BIN" --resident &
+# --resident prints one line per link on stderr, with timings.
+TRACE="$SCRATCH/trace.log"
+HOME="$SCRATCH" "$BIN" --resident 2>"$TRACE" &
 PID=$!
 if ! wait_for 30 app_is_running dev.supersurfer.app; then
   echo "FAIL: the app did not come up" >&2
@@ -120,6 +123,10 @@ if ! wait_for 30 grep -qF "$LINK?second=1" "$LOG"; then
   exit 1
 fi
 kill -0 "$PID"
+
+# Give the browser a moment to answer the second link, then show the timings.
+sleep 2
+sed 's/^/timing:  /' "$TRACE"
 
 RSS_KB="$(ps -o rss= -p "$PID" | tr -d ' ')"
 echo "memory:  resident set $(( STARTED_RSS_KB / 1024 )) MB after start, $(( RSS_KB / 1024 )) MB after two links"
