@@ -32,6 +32,7 @@ enum SelfTest {
         let browsers = engine.browsers()
         let installed = browsers?.browsers ?? []
         check("browsers decode", browsers?.ok == true && !installed.isEmpty)
+        check("unreadable profile lists are reported", browsers?.profilesBlocked != nil)
 
         let opener = OpenerInfo(name: "Self Test", bundleId: "dev.supersurfer.selftest", path: nil)
         let routed = engine.route(

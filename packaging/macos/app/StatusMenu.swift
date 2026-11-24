@@ -56,7 +56,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         let app = self.app
         let status = app.engine.status()
-        let browsers = app.engine.browsers()?.browsers ?? []
+        let installed = app.engine.browsers()
+        let browsers = installed?.browsers ?? []
+        let profilesBlocked = installed?.profilesBlocked ?? []
         let rules = app.engine.rules()
         app.setConfigError(status?.configError)
 
@@ -71,6 +73,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 "⚠︎ config.js enthält einen Fehler. Anzeigen …"
             )) {
                 app.showConfigError()
+            })
+        }
+        if !profilesBlocked.isEmpty {
+            menu.addItem(ActionMenuItem(tr(
+                "⚠︎ Browser profiles cannot be read. Show…",
+                "⚠︎ Browser-Profile sind nicht lesbar. Anzeigen …"
+            )) {
+                app.showProfilesBlocked(profilesBlocked)
             })
         }
 

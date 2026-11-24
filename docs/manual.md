@@ -26,8 +26,11 @@ Download the matching artifact from [Releases](https://github.com/okieselbach/Su
 Unzip `SuperSurfer.app.zip` into `/Applications`, then:
 
 ```bash
+xattr -cr /Applications/SuperSurfer.app
 /Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer register
 ```
+
+The first line is needed once per download: the app is not notarized yet, and macOS refuses to open a downloaded app it cannot verify. (Or try to open it, then allow it under System Settings → Privacy & Security → **Open Anyway**.)
 
 `register` also starts the app. It stays in the menu bar from then on (no Dock icon); turn on **Launch at Login** in its menu to have it there after a restart. See [Menu bar app](#menu-bar-app-macos).
 
@@ -111,6 +114,20 @@ Hold ⌥ Option while clicking a link. A menu opens at the pointer with your bro
 
 Without the key nothing asks: links follow `config.js`, then the saved rules, then `defaultBrowser`.
 
+### Browser profiles on macOS 27 and later
+
+macOS 27 keeps apps away from the data of browsers, and that is where Chrome, Edge, Firefox and the others keep the names of their profiles. SuperSurfer routes every link all the same. What it loses is the list of profiles:
+
+- The menu shows **⚠︎ Browser profiles cannot be read**. Browsers are listed without profiles, or with the profiles SuperSurfer read the last time it could.
+- A Chromium profile named the way the browser shows it (`"edge:Work"`) cannot be found without that list, and the link opens in the profile the browser used last. Named by its folder (`"edge:Profile 1"`, `"chrome:Default"`) it keeps working, because that needs no list. The folder is the last part of "Profile Path" on `chrome://version` or `edge://version`.
+- Firefox profiles keep working by name.
+
+To give the list back, open System Settings → Privacy & Security → **Files & Folders** and switch on the browsers under SuperSurfer. macOS adds those switches the first time it refuses SuperSurfer. If SuperSurfer is not listed there, add it under **Full Disk Access** instead. Then quit SuperSurfer and open it again.
+
+Commands in a terminal run with the permissions of the terminal app. Give that app the same access if `supersurfer doctor` should list profiles too.
+
+macOS ties the permission to the app's signature. Releases are not signed with a Developer ID yet, so expect to give it again after an update.
+
 ## Saved rules
 
 Rules saved from the picker live in `rules.json`, next to `config.js`:
@@ -142,6 +159,10 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 **Wrong architecture (Linux)** — ARM machines need `supersurfer-linux-aarch64.tar.gz`, not the x86_64 build.
 
 **Routing falls back to default** — run `supersurfer test <url>` and fix config errors shown on stderr.
+
+**No profiles, or links open in the wrong profile (macOS 27 and later)** — macOS no longer lets apps read browser data unasked. See [Browser profiles on macOS 27 and later](#browser-profiles-on-macos-27-and-later).
+
+**"Apple could not verify…" when opening the app (macOS)** — run `xattr -cr /Applications/SuperSurfer.app` once after downloading.
 
 **No menu bar icon (macOS)** — start the app with `open -a SuperSurfer`. If the icon was dragged out of the menu bar, this also brings it back.
 

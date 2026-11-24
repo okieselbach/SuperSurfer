@@ -33,7 +33,8 @@ pub fn ensure_ready() -> Result<bool> {
     } else if !types.exists() || stored_version.is_some() {
         // On upgrade (stored_version is Some but mismatched), refresh types so
         // editor IntelliSense tracks the installed SuperSurfer version.
-        fs::write(&types, config::types_stub())?;
+        fs::write(&types, config::types_stub())
+            .with_context(|| format!("failed to write {}", types.display()))?;
         config::restrict_file(&types);
     }
 

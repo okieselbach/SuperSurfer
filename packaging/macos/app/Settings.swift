@@ -116,3 +116,20 @@ enum DefaultBrowser {
         }
     }
 }
+
+enum PrivacySettings {
+    /// Opens System Settings where access to the data of other apps is
+    /// granted: Privacy & Security > Files & Folders. Before macOS 13 that
+    /// list has no address of its own, so the Privacy tab has to do.
+    static func openFilesAndFolders() {
+        let address: String
+        if #available(macOS 13.0, *) {
+            address = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_FilesAndFolders"
+        } else {
+            address = "x-apple.systempreferences:com.apple.preference.security?Privacy"
+        }
+        if let pane = URL(string: address) {
+            NSWorkspace.shared.open(pane)
+        }
+    }
+}

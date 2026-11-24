@@ -57,7 +57,11 @@ fn build_install(
         app_path: Some(exe_path),
         bundle_id: None,
         profiles: if load_profiles {
-            discover_profiles(spec)?
+            let (profiles, failure) = super::profiles_if_readable(spec, discover_profiles(spec));
+            if let Some(failure) = failure {
+                failure.warn();
+            }
+            profiles
         } else {
             vec![]
         },

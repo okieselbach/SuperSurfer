@@ -237,6 +237,10 @@ pub struct BrowsersReply {
     /// Id of `defaultBrowser`; listed first.
     pub default_browser_id: Option<String>,
     pub browsers: Vec<BrowserInfo>,
+    /// Names of browsers whose profile list the operating system would not
+    /// let SuperSurfer read. They are listed without profiles, or with the
+    /// profiles of the last complete scan where that is kept.
+    pub profiles_blocked: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -390,14 +394,22 @@ impl Engine {
             .and_then(|router| router.default_browser_spec().ok())
             .map(|spec| parse_browser_spec(&spec).0);
         let listed = self.with_registry(|registry| {
-            registry
+            let browsers = registry
                 .list()
                 .into_iter()
                 .filter_map(browser_info)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            let mut blocked: Vec<String> = registry
+                .unreadable_profiles()
+                .iter()
+                .filter(|failure| failure.denied)
+                .map(|failure| failure.browser.clone())
+                .collect();
+            blocked.sort_by_key(|name| name.to_lowercase());
+            (browsers, blocked)
         });
         match listed {
-            Ok(mut browsers) => {
+            Ok((mut browsers, profiles_blocked)) => {
                 browsers.sort_by_cached_key(|browser| {
                     (
                         Some(&browser.id) != default_browser_id.as_ref(),
@@ -409,6 +421,7 @@ impl Engine {
                     error: None,
                     default_browser_id,
                     browsers,
+                    profiles_blocked,
                 }
             }
             Err(err) => BrowsersReply {
