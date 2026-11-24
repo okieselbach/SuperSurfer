@@ -128,9 +128,11 @@ fi
 # A shortcut that cannot reach SuperSurfer says so in the system log and
 # opens a window by itself. SuperSurfer was running all the time, so none
 # should have had to. Reading the log needs an administrator; where that
-# fails, nothing is concluded.
+# fails, nothing is concluded. Only what "logger" wrote counts: "log" itself
+# puts this very question into the log, with the words it asks for.
 NOTE="could not reach SuperSurfer"
-ALONE="$(log show --last 15m --style compact --predicate "eventMessage CONTAINS \"$NOTE\"" 2>/dev/null | grep "$NOTE" || true)"
+ALONE="$(log show --last 15m --style compact \
+  --predicate "process == \"logger\" AND eventMessage CONTAINS \"$NOTE\"" 2>/dev/null | grep "$NOTE" || true)"
 if [ -n "$ALONE" ]; then
   echo "FAIL: a shortcut could not reach SuperSurfer and opened a window by itself:" >&2
   printf '%s\n' "$ALONE" >&2
