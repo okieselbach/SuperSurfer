@@ -336,7 +336,7 @@ URL event → SuperSurfer.app (Swift, stays loaded)
 
 ## Status
 
-v0.1.x is usable as a default browser on macOS, Windows, and Linux:
+v0.2.x is usable as a default browser on macOS, Windows, and Linux:
 
 - Rust core with QuickJS sandboxed config runtime
 - JavaScript config with JSDoc types
