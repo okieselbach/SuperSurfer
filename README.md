@@ -40,6 +40,8 @@ Then register SuperSurfer as the default browser and try a dry-run:
 /Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer test https://github.com/org/repo
 ```
 
+`register` also starts the app. It stays in the menu bar from then on — see [Menu bar app](#menu-bar-app-macos).
+
 **Windows:**
 
 ```powershell
@@ -86,6 +88,69 @@ export default {
 
 `processRunning("edge")` checks whether a browser (by id, display name, or process name) is running — snapshot on first call per route, then cached for that evaluation.
 
+`ctx.modifiers` (`shift`, `alt`, `ctrl`, `cmd`) tells a matcher which modifier keys were held while the link was clicked, e.g. `match: (url, ctx) => ctx.modifiers.shift`. Only the macOS menu bar app can see the keyboard; on Windows and Linux, and from the command line, they are always `false`.
+
+## Menu bar app (macOS)
+
+On macOS SuperSurfer stays loaded once it has been started — by `register`, by the first link, by `open -a SuperSurfer`, or at login. It has no Dock icon and no window; the menu bar icon is the whole interface.
+
+Staying loaded is what makes a click fast. `config.js` is already evaluated and the browser list is in memory, so a link costs a fraction of a millisecond of routing instead of an app launch plus two helper processes. The browser is started in-process through `NSWorkspace`, the same Launch Services path `open` uses. `config.js` and `rules.json` are checked for changes when a link arrives (two `stat` calls), not polled, so the app does nothing at all while idle.
+
+The menu:
+
+| Item | What it does |
+|---|---|
+| **Recent Links** | The last ten links since the app started (memory only), each with how it was routed and how long SuperSurfer took. Open one again in another browser, save its site as a rule, or copy the cleaned link. |
+| **Saved Rules** | The rules in [`rules.json`](#saved-rules-rulesjson). Remove one, or open the file. |
+| **Picker Key** | Which modifier key opens the picker: ⌥ Option (default), ⇧ Shift, ⌃ Control, ⌘ Command, fn, or off. |
+| **Choose Browser for Copied Link…** | The picker for the link in the clipboard. Also the quickest way to see how a link *would* be routed. |
+| **Edit config.js**, **Show Config Folder**, **Show Decision Log**, **Reload Configuration** | Shortcuts to the files. Config changes are picked up on the next link by themselves, and the list of browsers and profiles is refreshed in the background; reloading re-reads all of it at once, e.g. right after adding a browser profile. |
+| **Launch at Login** | Start with the Mac (macOS 13 or later), so the first click of the day is as fast as the rest. |
+| **Make SuperSurfer the Default Browser** | Shown while something else is the default. |
+
+If `config.js` stops loading — a typo, a half-saved file — links keep following the last version that worked, and the menu bar icon turns into a warning triangle until the file loads again. If it has never loaded in this run, links open in Safari rather than nowhere.
+
+The icon can be dragged out of the menu bar with ⌘ held. Opening the app again (`open -a SuperSurfer`, Spotlight, Finder) brings it back and shows the menu.
+
+### Picker
+
+Hold the picker key (⌥ Option by default) while clicking a link and a menu opens at the pointer instead of the link opening:
+
+- the installed browsers and their profiles — the one the rules would have used has a checkmark; choose one to open the link there, this once;
+- **Always Open _site_ in** — open it and save a rule for the site, so the next link goes there without asking;
+- **Copy Cleaned Link** — the destination without redirect wrapper and tracking parameters.
+
+Escape closes the menu and the link is not opened. Without the key, nothing ever asks: links follow `config.js`, then the saved rules, then `defaultBrowser`.
+
+Some apps use ⌥-click themselves (browsers download the link target). Pick another key in the menu if that gets in the way.
+
+## Saved rules (`rules.json`)
+
+`config.js` is code, so no menu can edit it safely. What the picker saves goes into a plain data file next to it:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    { "domain": "github.com", "browser": "edge", "profile": "Work" },
+    { "domain": "intranet.example", "browser": "safari" }
+  ]
+}
+```
+
+- `domain` matches the host and all its subdomains. If several rules match, the most specific domain wins, whatever their order.
+- `browser` is a browser id as in `config.js`; `profile` and `private` are optional.
+- Order of precedence: `handlers` in `config.js` first, then `rules.json`, then `defaultBrowser`. A rule for a site that a `config.js` handler already claims never fires; the picker says so.
+- The file works on every platform, not just with the macOS menu. Edit it by hand or use `supersurfer rules`:
+
+```bash
+supersurfer rules                              # list
+supersurfer rules add github.com edge:Work     # or: --profile Work, --private
+supersurfer rules remove github.com
+```
+
+A `rules.json` that cannot be parsed is ignored (and reported by `doctor` and the menu), never overwritten.
+
 ## From Finicky
 
 There is no built-in migrate command. SuperSurfer already supports most Finicky config patterns (`{ name, profile }` browser targets, dynamic `browser` handlers, `rewrite` rules). Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersurfer').RouterConfig} */` comment above `export default`, then adjust:
@@ -124,10 +189,13 @@ Worth knowing under `route`: allowing a host with `supersurfer resolve allow` gi
 | `supersurfer register` | Register as default browser |
 | `supersurfer doctor` | List browsers, validate config |
 | `supersurfer test <url>` | Dry-run routing decision |
+| `supersurfer rules` | List, add or remove saved rules (`rules.json`) |
 | `supersurfer logs` | Tail decision log |
 | `supersurfer update-rules` | Fetch signed URL-cleaning rules (planned) |
 
-When registered as the default browser, the OS invokes the packaged app with the URL (macOS: `SuperSurfer.app`; Windows: `supersurfer.exe --from-os "%1"`; Linux: `supersurfer --from-os %u` via `supersurfer.desktop`).
+When registered as the default browser, the OS hands the URL to the packaged app (macOS: a URL event to the running `SuperSurfer.app`; Windows: `supersurfer.exe --from-os "%1"`; Linux: `supersurfer --from-os %u` via `supersurfer.desktop`).
+
+On macOS the command line lives in the app's executable: `/Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer <command>` behaves like `supersurfer <command>` elsewhere, whether or not the menu bar app is running.
 
 ## Build from source
 
@@ -172,7 +240,23 @@ mise run register
 
 Note: if your shell aliases `open` to `xdg-open`, use the full app path above — not `open -a SuperSurfer`.
 
-The bundle contains a small Cocoa launcher (`SuperSurfer`) that receives `http`/`https` URL events and forwards them to the Rust router (`supersurfer-bin`). On macOS's case-insensitive filesystem these must be distinct names.
+The bundle holds one executable. The macOS side (URL events, menu bar, picker, launching through `NSWorkspace`) is Swift in `packaging/macos/app/`; the Rust core is linked into it as a static library and reached through a three-function C interface (`src/ffi.rs`, JSON in and out). `build-app.sh` builds both with `cargo` and `swiftc` — no Xcode project.
+
+The same executable is the command line. Started by Launch Services it becomes the menu bar app; started from a shell it runs the given command and exits. Two flags are for development:
+
+```bash
+dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --resident    # run the menu bar app from a shell; prints a timing line per link
+dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --self-test   # check the Swift/Rust interface against a scratch HOME
+bash packaging/macos/smoke-test.sh                            # self-test, then start the app and route a real link
+```
+
+When replacing an installed copy, quit the running app first (menu → Quit SuperSurfer); the next link or `open -a SuperSurfer` starts the new one.
+
+To sign with a Developer ID instead of ad hoc (hardened runtime and timestamp, as notarization requires):
+
+```bash
+CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" mise run package-macos
+```
 
 ### Windows — `supersurfer.exe`
 
@@ -233,23 +317,38 @@ OS URL event → SuperSurfer (Rust)
                 ├─ Config loader (JS → QuickJS)
                 ├─ URL pre-processor (unwrap + tracker strip)
                 ├─ handlers / rewrite evaluation
+                ├─ saved rules (rules.json)
                 ├─ Browser resolver (abstract name → platform launch)
                 └─ Launcher (spawn browser, exit)
 ```
 
+Windows and Linux run this once per link: the OS starts `supersurfer`, it routes, spawns the browser and exits.
+
+On macOS the same core is loaded once and kept warm inside the menu bar app:
+
+```
+URL event → SuperSurfer.app (Swift, stays loaded)
+              ├─ reads modifier keys and the frontmost app
+              ├─ Rust core, linked in (src/engine.rs: warm config, rules and browser list)
+              ├─ picker menu, if the picker key is held
+              └─ NSWorkspace → browser
+```
+
 ## Status
 
-v0.1.x is usable as a default browser on macOS, Windows, and Linux:
+v0.2.x is usable as a default browser on macOS, Windows, and Linux:
 
 - Rust core with QuickJS sandboxed config runtime
 - JavaScript config with JSDoc types
 - Matcher helpers (`host`, `domain`, `suffix`, `glob`, `path`, `regex`, `all`, `not`, `processRunning`)
 - Built-in URL cleaning with `route` / `direct` / `off` modes (safelink unwrapping, UTM stripping)
 - macOS `SuperSurfer.app` bundle + Launch Services / duti registration
+- macOS menu bar app that stays loaded: recent links, picker on a modifier key, launch at login
+- Saved rules in `rules.json`, managed by the picker or `supersurfer rules`
 - Windows `supersurfer.exe` + registry browser registration
 - Linux `supersurfer` binary + `.desktop` / xdg-settings registration
 - macOS, Windows, and Linux browser discovery + launch
-- CLI: `init`, `doctor`, `test`, `logs`
+- CLI: `init`, `doctor`, `test`, `rules`, `logs`
 
 **Not yet:** signed/notarized distribution, signed rules updates. macOS Gatekeeper will warn on first open until the app is notarized — right-click → Open, or `xattr -cr /Applications/SuperSurfer.app`.
 

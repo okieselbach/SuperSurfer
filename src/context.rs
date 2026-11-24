@@ -34,7 +34,10 @@ impl Platform {
     }
 }
 
+/// Modifier keys held when the link was opened. Only a host that stays in
+/// memory can see them (the macOS app); everywhere else they are all `false`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Modifiers {
     pub shift: bool,
     pub alt: bool,

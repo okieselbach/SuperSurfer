@@ -3,6 +3,7 @@ use crate::config::loader::{load_default_config, LoadedConfig};
 use crate::context::Context;
 use crate::logging;
 use crate::preflight;
+use crate::rules::RuleSet;
 use crate::script::runtime::BrowserTarget;
 use crate::url_clean;
 use anyhow::{Context as _, Result};
@@ -39,6 +40,27 @@ pub struct PreflightProbe {
     pub profile: Option<String>,
 }
 
+/// Which part of the configuration picked the browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteSource {
+    /// A `handlers` entry in `config.js` matched.
+    Handler,
+    /// A saved rule in `rules.json` matched.
+    Rule,
+    /// Nothing matched, so `defaultBrowser` was used.
+    Default,
+}
+
+impl RouteSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RouteSource::Handler => "handler",
+            RouteSource::Rule => "rule",
+            RouteSource::Default => "default",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RouteDecision {
     pub input_url: String,
@@ -55,6 +77,9 @@ pub struct RouteDecision {
     pub matched_handler: bool,
     pub fallback: bool,
     pub app_path: Option<String>,
+    pub source: RouteSource,
+    /// Domain of the saved rule that matched, when `source` is [`RouteSource::Rule`].
+    pub rule_domain: Option<String>,
 }
 
 impl RouteDecision {
@@ -89,24 +114,47 @@ struct ScriptRoute {
 pub struct Router {
     config: LoadedConfig,
     registry: BrowserRegistry,
+    rules: RuleSet,
+    rules_error: Option<String>,
 }
 
 impl Router {
     pub fn new() -> Result<Self> {
-        Ok(Self {
-            config: load_default_config()?,
-            registry: BrowserRegistry::discover()?,
-        })
+        Self::assemble(load_default_config()?, BrowserRegistry::discover()?)
     }
 
     pub fn with_config_path(path: PathBuf) -> Result<Self> {
+        Self::assemble(
+            crate::config::loader::load_config(&path)?,
+            BrowserRegistry::discover_fresh()?,
+        )
+    }
+
+    fn assemble(config: LoadedConfig, registry: BrowserRegistry) -> Result<Self> {
+        let (rules, rules_error) =
+            RuleSet::load_lenient(&RuleSet::path_beside(&config.source_path));
         Ok(Self {
-            config: crate::config::loader::load_config(&path)?,
-            registry: BrowserRegistry::discover_fresh()?,
+            config,
+            registry,
+            rules,
+            rules_error,
         })
     }
 
+    /// Route a URL and record the outcome in the decision log.
     pub fn decide(&self, raw_url: &str, context: &Context) -> Result<RouteDecision> {
+        let decision = self.preview(raw_url, context)?;
+        // Never gate browser launch on log I/O (permissions, full disk, etc.).
+        if let Err(err) = logging::append_decision(&decision.log_line()) {
+            eprintln!("warning: failed to append decision log: {err}");
+        }
+        Ok(decision)
+    }
+
+    /// Route a URL without touching the decision log, for callers that have
+    /// not settled on opening it yet (a picker asking the user) or that log
+    /// the outcome themselves.
+    pub fn preview(&self, raw_url: &str, context: &Context) -> Result<RouteDecision> {
         let _process_guard = crate::process::RouteProcessGuard::new();
         let raw_url = crate::input_url::normalize_input_url(raw_url)?;
         let mut url = Url::parse(&raw_url).with_context(|| format!("invalid URL: {raw_url}"))?;
@@ -132,12 +180,9 @@ impl Router {
         let launch_url = pick_launch_url(&cleaned, &route);
         let routed_url = route.routed;
 
-        let target = match route.target {
-            Some(t) if t.name.is_some() => t,
-            _ => BrowserTarget {
-                name: Some(self.config.runtime.default_browser()?),
-                private: false,
-            },
+        let (target, source, rule_domain) = match route.target {
+            Some(t) if t.name.is_some() => (t, RouteSource::Handler, None),
+            _ => self.unhandled_target(&routed_url)?,
         };
 
         let (
@@ -154,7 +199,7 @@ impl Router {
             fallback = true;
         }
 
-        let decision = RouteDecision {
+        Ok(RouteDecision {
             input_url,
             routed_url: routed_url.to_string(),
             launch_url: launch_url.to_string(),
@@ -166,14 +211,35 @@ impl Router {
             matched_handler,
             fallback,
             app_path,
-        };
+            source,
+            rule_domain,
+        })
+    }
 
-        // Never gate browser launch on log I/O (permissions, full disk, etc.).
-        if let Err(err) = logging::append_decision(&decision.log_line()) {
-            eprintln!("warning: failed to append decision log: {err}");
+    /// What to open when no `config.js` handler claimed the URL: the browser
+    /// of a saved rule if one matches, otherwise `defaultBrowser`.
+    fn unhandled_target(
+        &self,
+        routed: &Url,
+    ) -> Result<(BrowserTarget, RouteSource, Option<String>)> {
+        if let Some(rule) = self.rules.lookup(routed) {
+            return Ok((
+                BrowserTarget {
+                    name: Some(rule.browser_spec()),
+                    private: rule.private,
+                },
+                RouteSource::Rule,
+                Some(rule.domain.clone()),
+            ));
         }
-
-        Ok(decision)
+        Ok((
+            BrowserTarget {
+                name: Some(self.config.runtime.default_browser()?),
+                private: false,
+            },
+            RouteSource::Default,
+            None,
+        ))
     }
 
     pub fn route_and_launch(
@@ -191,6 +257,33 @@ impl Router {
 
     pub fn registry(&self) -> &BrowserRegistry {
         &self.registry
+    }
+
+    /// Swap in a newer view of the installed browsers. A host that keeps the
+    /// router loaded uses this instead of rebuilding it (and re-evaluating
+    /// `config.js`) whenever browsers or profiles may have changed.
+    pub fn replace_registry(&mut self, registry: BrowserRegistry) {
+        self.registry = registry;
+    }
+
+    /// Why `rules.json` is being ignored, if it is.
+    pub fn rules_error(&self) -> Option<&str> {
+        self.rules_error.as_deref()
+    }
+
+    pub fn rules_path(&self) -> PathBuf {
+        RuleSet::path_beside(&self.config.source_path)
+    }
+
+    pub fn reload_rules(&mut self) {
+        let (rules, rules_error) = RuleSet::load_lenient(&self.rules_path());
+        self.rules = rules;
+        self.rules_error = rules_error;
+    }
+
+    /// `defaultBrowser` from `config.js`, in the `"browser"` / `"browser:profile"` notation.
+    pub fn default_browser_spec(&self) -> Result<String> {
+        self.config.runtime.default_browser()
     }
 
     pub fn config_path(&self) -> &PathBuf {
@@ -250,11 +343,12 @@ impl Router {
                 }
             }
             Ok(None) => {
-                let default = self.config.runtime.default_browser()?;
-                let (browser_id, prof) = parse_browser_spec(&default);
+                let (target, _, _) = self.unhandled_target(&route_url)?;
+                let spec = target.name.unwrap_or_default();
+                let (browser_id, prof) = parse_browser_spec(&spec);
                 match self.registry.resolve(&browser_id, prof.as_deref()) {
                     Ok(resolved) => (Some(resolved.display_name), resolved.profile),
-                    Err(_) => (Some(default), prof),
+                    Err(_) => (Some(spec), prof),
                 }
             }
             Err(_) => (None, None),
@@ -397,7 +491,7 @@ fn pick_launch_url(cleaned: &url_clean::CleanOutcome, route: &ScriptRoute) -> Ur
     cleaned.launch.clone()
 }
 
-fn parse_browser_spec(spec: &str) -> (String, Option<String>) {
+pub(crate) fn parse_browser_spec(spec: &str) -> (String, Option<String>) {
     if let Some((browser, profile)) = spec.split_once(':') {
         (
             crate::browser::registry::normalize_browser_id(browser).to_string(),
@@ -506,6 +600,8 @@ mod tests {
             matched_handler: true,
             fallback: false,
             app_path: None,
+            source: RouteSource::Handler,
+            rule_domain: None,
         };
         assert!(decision
             .log_line()
