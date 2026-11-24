@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The second branch is temporary: it builds Dock Click on a Mac while it
+    # is being written, and goes again before the branch is done.
+    branches: [main, claude/youthful-sagan-j5h2me]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
