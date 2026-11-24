@@ -74,6 +74,11 @@ export default {
 };
 CONFIG
 
+# Finishes first-run setup for the scratch HOME. Otherwise the app would open
+# the manual in the system's browser on start, and "Safari is running" below
+# would prove nothing about the routed link.
+HOME="$SCRATCH" "$BIN" doctor
+
 SAFARI_WAS_RUNNING=no
 if app_is_running com.apple.Safari; then
   SAFARI_WAS_RUNNING=yes
