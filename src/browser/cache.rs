@@ -1,6 +1,6 @@
 use crate::browser::registry::BrowserInstall;
 use crate::config;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -74,6 +74,23 @@ pub fn load(expected_fingerprint: &str) -> Result<Option<HashMap<String, Browser
     Ok(Some(cached.browsers))
 }
 
+/// The browsers as the last complete scan saw them, whichever apps were
+/// installed then. Empty when there is no usable cache file.
+///
+/// Good for what does not depend on the installed apps: the profile lists.
+/// Launch paths must come from live discovery, as with [`load`].
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn last_complete_scan() -> HashMap<String, BrowserInstall> {
+    let Ok(path) = cache_path() else {
+        return HashMap::new();
+    };
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<CachedRegistry>(&content).ok())
+        .map(|cached| cached.browsers)
+        .unwrap_or_default()
+}
+
 /// Merge live-discovered launch paths over a cache hit.
 ///
 /// The browser cache lives in the user config directory and is not integrity-
@@ -124,7 +141,8 @@ pub fn rebind_app_paths(
 pub fn save(fingerprint: &str, browsers: &HashMap<String, BrowserInstall>) -> Result<()> {
     let path = cache_path()?;
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let payload = CachedRegistry {
         fingerprint: fingerprint.to_string(),
@@ -133,12 +151,12 @@ pub fn save(fingerprint: &str, browsers: &HashMap<String, BrowserInstall>) -> Re
     let data = serde_json::to_string(&payload)?;
     // Atomic replace so a crash mid-write cannot leave a truncated JSON file.
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, data)?;
+    fs::write(&tmp, data).with_context(|| format!("failed to write {}", tmp.display()))?;
     crate::config::restrict_file(&tmp);
     if path.exists() {
         let _ = fs::remove_file(&path);
     }
-    fs::rename(&tmp, &path)?;
+    fs::rename(&tmp, &path).with_context(|| format!("failed to replace {}", path.display()))?;
     crate::config::restrict_file(&path);
     Ok(())
 }

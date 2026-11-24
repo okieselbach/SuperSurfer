@@ -79,6 +79,12 @@ extension ModifierState {
     }
 }
 
+/// A second button for a message, and what it does.
+struct AlertAction {
+    let title: String
+    let run: () -> Void
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let recentLimit = 10
 
@@ -97,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: StatusMenuController?
     private var pendingPickers: [Decision] = []
     private var pickerMenu: NSMenu?
-    private var pendingAlerts: [(title: String, text: String)] = []
+    private var pendingAlerts: [(title: String, text: String, action: AlertAction?)] = []
     private var activity: NSObjectProtocol?
 
     // MARK: - Lifecycle
@@ -411,6 +417,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    /// macOS 27 and later keep apps away from the data of browsers until the
+    /// user allows it. Links are routed regardless; what is missing is the
+    /// list of profiles.
+    func showProfilesBlocked(_ browsers: [String]) {
+        let names = browsers.joined(separator: ", ")
+        showAlert(
+            title: tr("Browser profiles cannot be read", "Browser-Profile sind nicht lesbar"),
+            text: tr(
+                "macOS does not let SuperSurfer read the profile list of: \(names). macOS 27 and later protect browser data from other apps.\n\nLinks are routed all the same. SuperSurfer uses the profile lists it read last, if any. A profile it does not know opens in the profile that browser used last, unless config.js names it by its folder (\"Default\", \"Profile 1\").\n\nTo allow access, open System Settings > Privacy & Security > Files & Folders and switch on the browsers under SuperSurfer. If SuperSurfer is not listed there, add it under Full Disk Access instead. Then quit SuperSurfer and open it again.",
+                "macOS lässt SuperSurfer die Profilliste nicht lesen von: \(names). Ab macOS 27 sind Browser-Daten vor anderen Apps geschützt.\n\nLinks werden trotzdem geroutet. SuperSurfer nutzt die zuletzt gelesenen Profillisten, falls vorhanden. Ein unbekanntes Profil öffnet im zuletzt genutzten Profil des Browsers, außer config.js nennt es mit seinem Ordnernamen („Default“, „Profile 1“).\n\nZugriff erlauben: Systemeinstellungen > Datenschutz & Sicherheit > Dateien & Ordner öffnen und unter SuperSurfer die Browser einschalten. Steht SuperSurfer dort nicht, füge es stattdessen unter Festplattenvollzugriff hinzu. Danach SuperSurfer beenden und neu öffnen."
+            ),
+            action: AlertAction(title: tr("Open System Settings", "Systemeinstellungen öffnen")) {
+                PrivacySettings.openFilesAndFolders()
+            }
+        )
+    }
+
     func toggleLoginItem() {
         do {
             try LoginItem.setEnabled(!LoginItem.isEnabled)
@@ -434,8 +457,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// block on the main dispatch queue would stall that queue, and with it
     /// every routed link, until someone clicks OK. Started from the run loop
     /// it does not.
-    func showAlert(title: String, text: String) {
-        pendingAlerts.append((title: title, text: text))
+    func showAlert(title: String, text: String, action: AlertAction? = nil) {
+        pendingAlerts.append((title: title, text: text, action: action))
         if pendingAlerts.count == 1 {
             perform(#selector(showPendingAlert), with: nil, afterDelay: 0)
         }
@@ -449,10 +472,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = message.title
         alert.informativeText = message.text
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        if let action = message.action {
+            // The first button is the default one and answers Return.
+            alert.addButton(withTitle: action.title)
+            alert.addButton(withTitle: "OK").keyEquivalent = "\u{1b}"
+        } else {
+            alert.addButton(withTitle: "OK")
+        }
+        let response = alert.runModal()
 
         pendingAlerts.removeFirst()
+        if let action = message.action, response == .alertFirstButtonReturn {
+            action.run()
+        }
         if !pendingAlerts.isEmpty {
             perform(#selector(showPendingAlert), with: nil, afterDelay: 0)
         }

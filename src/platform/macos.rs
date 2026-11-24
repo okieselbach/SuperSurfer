@@ -201,20 +201,35 @@ fn try_set_default_with_workspace(app: &Path) -> Result<bool> {
     if !helper.exists() {
         return Ok(false);
     }
-    let output = Command::new(&helper)
+    let output = match Command::new(&helper)
         .arg(app)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .output()?;
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            // Not being allowed to start the helper is no reason to give up:
+            // the other ways of becoming the default browser follow.
+            eprintln!("warning: could not run {}: {err}", helper.display());
+            return Ok(false);
+        }
+    };
     Ok(output.status.success())
 }
 
 fn try_register_with_duti() -> Result<bool> {
-    if Command::new("which").arg("duti").output()?.status.success() {
+    let has_duti = Command::new("which")
+        .arg("duti")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if has_duti {
         for scheme in ["http", "https"] {
             let status = Command::new("duti")
                 .args(["-s", BUNDLE_ID, scheme])
-                .status()?;
+                .status()
+                .context("failed to run duti")?;
             if !status.success() {
                 return Ok(false);
             }
