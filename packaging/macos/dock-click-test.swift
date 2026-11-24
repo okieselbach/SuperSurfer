@@ -850,87 +850,57 @@ func testMinimize() {
     try? FileManager.default.removeItem(at: documents)
 }
 
-// TEMPORARY: what does the Dock look like to Accessibility in Mission
-// Control, App Exposé and Show Desktop, and what does a click on the icon of
-// the app in front do there when nobody helps?
-func dumpDock(_ label: String) {
-    guard let dock = dockElement() else {
-        return
-    }
-    for child in elements(dock, kAXChildrenAttribute) {
-        let kids = elements(child, kAXChildrenAttribute)
-        say("PROBE \(label): role \(text(child, kAXRoleAttribute) ?? "-")"
-            + " subrole \(text(child, kAXSubroleAttribute) ?? "-")"
-            + " id \(text(child, "AXIdentifier") ?? "-")"
-            + " desc \(text(child, kAXDescriptionAttribute) ?? "-")"
-            + " title \(text(child, kAXTitleAttribute) ?? "-")"
-            + " children \(kids.count)")
-        if text(child, kAXRoleAttribute) != "AXList" {
-            for kid in kids.prefix(6) {
-                say("PROBE \(label):   - role \(text(kid, kAXRoleAttribute) ?? "-")"
-                    + " id \(text(kid, "AXIdentifier") ?? "-")"
-                    + " desc \(text(kid, kAXDescriptionAttribute) ?? "-")")
-            }
-        }
-    }
+// TEMPORARY: for the question whether a Dock icon per browser profile can
+// bring that profile's window to the front. What tells the windows of the
+// profiles apart, and what brings one of them forward?
+
+func whoIsInFront() -> String {
+    return NSWorkspace.shared.frontmostApplication
+        .map { "\(name($0)) (pid \($0.processIdentifier))" } ?? "nothing"
 }
 
-func boundsOnScreen(_ app: NSRunningApplication) -> String {
-    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+func outputOf(_ tool: String, _ arguments: [String]) -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: tool)
+    process.arguments = arguments
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
         return "?"
     }
-    return list.compactMap { window -> String? in
-        guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == app.processIdentifier,
-              (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
-              let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-              let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else {
-            return nil
-        }
-        return "\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))"
-    }.joined(separator: " | ")
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
-func probeShowDesktop() {
-    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
-    say("PROBE desktop: screens \(NSScreen.screens.map { $0.frame })")
-    say("PROBE desktop, normal: \(boundsOnScreen(calculator))")
-    openMissionControl("1")
-    say("PROBE desktop, shown: \(boundsOnScreen(calculator)); \(state(of: calculator))")
-    click(calculator)
-    pause(2)
-    say("PROBE desktop, after a click on the icon: \(boundsOnScreen(calculator)); \(state(of: calculator))")
-    pressEscape()
-    calculator.terminate()
+func axWindows(_ app: NSRunningApplication) -> [AXUIElement] {
+    return elements(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute)
 }
 
-func describe(_ element: AXUIElement) -> String {
-    var names: CFArray?
-    AXUIElementCopyAttributeNames(element, &names)
-    var parts: [String] = ["attributes: \(((names as? [String]) ?? []).joined(separator: ","))"]
-    for attribute in ["AXTitle", "AXSubrole", "AXIdentifier", "AXDescription", "AXDocument", "AXMain", "AXMinimized"] {
-        let found = value(element, attribute)
-        if let string = found as? String, !string.isEmpty {
-            parts.append("\(attribute)=\(string)")
-        } else if let flag = found as? Bool {
-            parts.append("\(attribute)=\(flag)")
-        }
+func isMain(_ window: AXUIElement) -> Bool {
+    return (value(window, kAXMainAttribute) as? Bool) == true
+}
+
+func windowLines(_ tag: String, _ label: String, _ app: NSRunningApplication) {
+    say("PROBE \(tag), \(label): \(windowsOnScreen(app)) windows on screen, in front: \(whoIsInFront())")
+    for window in axWindows(app) {
+        let title = text(window, kAXTitleAttribute) ?? "?"
+        let minimized = (value(window, kAXMinimizedAttribute) as? Bool) ?? false
+        say("PROBE \(tag), \(label):   \"\(title)\" main: \(isMain(window)), minimized: \(minimized)")
     }
-    return parts.joined(separator: "; ")
 }
 
-/// What is there to tell the windows of Edge profiles apart, and to bring
-/// one profile to the front?
-func probeEdge() {
-    let edge = "/Applications/Microsoft Edge.app"
-    let binary = edge + "/Contents/MacOS/Microsoft Edge"
+func probeChromium(_ tag: String, _ appPath: String, _ binaryName: String, _ bundleID: String) {
+    let binary = appPath + "/Contents/MacOS/" + binaryName
     guard FileManager.default.fileExists(atPath: binary) else {
-        say("PROBE edge: not installed")
+        say("PROBE \(tag): not installed")
         return
     }
     let data = FileManager.default.temporaryDirectory
-        .appendingPathComponent("supersurfer-edge-probe-\(ProcessInfo.processInfo.processIdentifier)").path
-    var started: [Process] = []
+        .appendingPathComponent("supersurfer-\(tag)-probe-\(ProcessInfo.processInfo.processIdentifier)").path
     func launch(_ profile: String, _ url: String?) {
         var arguments = [
             "--user-data-dir=\(data)", "--profile-directory=\(profile)",
@@ -946,137 +916,251 @@ func probeEdge() {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            started.append(process)
-            say("PROBE edge: started with profile \(profile), pid \(process.processIdentifier)")
+            say("PROBE \(tag): started with profile folder \(profile), pid \(process.processIdentifier)")
         } catch {
-            say("PROBE edge: could not start: \(error.localizedDescription)")
+            say("PROBE \(tag): could not start: \(error.localizedDescription)")
         }
     }
     func running() -> NSRunningApplication? {
-        return NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.edgemac")
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
             .first { $0.activationPolicy == .regular }
     }
-    func everything(_ label: String) {
-        // Who has windows on screen, whatever their layer: a dialog from the
-        // system would show up here.
-        let options: CGWindowListOption = [.optionOnScreenOnly]
-        let list = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
-        var owners: [String: Int] = [:]
-        for window in list {
-            let owner = (window[kCGWindowOwnerName as String] as? String) ?? "?"
-            let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
-            owners["\(owner)@\(layer)", default: 0] += 1
+    defer {
+        for instance in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
+            instance.forceTerminate()
         }
-        let summary = owners.sorted { $0.key < $1.key }.map { $0.key + "x" + String($0.value) }
-        say("PROBE edge, \(label): on screen " + summary.joined(separator: " "))
-    }
-    func windows(_ label: String) {
-        guard let app = running() else {
-            say("PROBE edge, \(label): not running")
-            return
-        }
-        say("PROBE edge, \(label): \(windowsOnScreen(app)) windows on screen, in front: "
-            + "\(NSWorkspace.shared.frontmostApplication.map(name) ?? "nothing")")
-        let element = AXUIElementCreateApplication(app.processIdentifier)
-        var found: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &found)
-        let all = (found as? [AXUIElement]) ?? []
-        say("PROBE edge, \(label): Accessibility lists \(all.count) windows (error \(result.rawValue))")
-        for window in all {
-            say("PROBE edge, \(label):   window \(describe(window))")
-        }
+        pause(2)
+        try? FileManager.default.removeItem(atPath: data)
     }
 
-    say("PROBE edge: starting")
     launch("Default", "about:blank")
-    let up = waitUntil(40, { running().map { windowsOnScreen($0) > 0 } ?? false })
-    say("PROBE edge: \(up ? "has a window" : "no window after 40 s"), running: \(running() != nil)")
-    everything("after start")
-    guard up, let app = running() else {
-        for process in started where process.isRunning {
-            process.terminate()
-        }
+    guard waitUntil(40, { running().map { windowsOnScreen($0) > 0 } ?? false }), let app = running() else {
+        say("PROBE \(tag): no window after 40 s")
         return
     }
     pause(4)
-    windows("one profile")
+    windowLines(tag, "one profile", app)
     launch("Profile 1", "about:blank")
     pause(6)
     launch("Profile 2", "about:blank")
     pause(6)
-    windows("three profiles")
+    windowLines(tag, "three profiles", app)
 
     let element = AXUIElementCreateApplication(app.processIdentifier)
-    var profileItems: [AXUIElement] = []
-    if let bar = value(element, kAXMenuBarAttribute) {
-        for menu in elements(bar as! AXUIElement, kAXChildrenAttribute) {
-            let title = text(menu, kAXTitleAttribute) ?? "?"
-            let items = elements(menu, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) }
-            let titles = items.map { text($0, kAXTitleAttribute) ?? "" }
-            say("PROBE edge, menu \(title): \(titles.count) items")
-            if title.lowercased().contains("profil") || title == "Window" {
-                say("PROBE edge, menu \(title): \(titles)")
-            }
-            if title.lowercased().contains("profil") {
-                profileItems = items
-            }
+    /// The entries of the menu that lists the profiles, read afresh each
+    /// time: the browser builds that menu again when windows come and go.
+    func profileMenu() -> [AXUIElement] {
+        guard let bar = value(element, kAXMenuBarAttribute) else {
+            return []
         }
-    } else {
-        say("PROBE edge: no menu bar through Accessibility")
+        for menu in elements(bar as! AXUIElement, kAXChildrenAttribute)
+        where (text(menu, kAXTitleAttribute) ?? "").lowercased().contains("profil") {
+            return elements(menu, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) }
+        }
+        return []
     }
-
-    for item in profileItems.prefix(3) {
-        let title = text(item, kAXTitleAttribute) ?? ""
-        guard !title.isEmpty else {
-            continue
+    func choose(_ index: Int, _ label: String) {
+        let items = profileMenu()
+        guard index < items.count else {
+            say("PROBE \(tag), \(label): the menu has only \(items.count) entries")
+            return
         }
-        let result = AXUIElementPerformAction(item, kAXPressAction as CFString)
+        let title = text(items[index], kAXTitleAttribute) ?? "?"
+        let result = AXUIElementPerformAction(items[index], kAXPressAction as CFString)
         pause(2.5)
-        say("PROBE edge: chose \(title) in the menu (error \(result.rawValue))")
-        windows("after \(title)")
+        say("PROBE \(tag), \(label): chose \"\(title)\" in the menu (error \(result.rawValue))")
+        windowLines(tag, label, app)
+    }
+    if let bar = value(element, kAXMenuBarAttribute) {
+        let titles = elements(bar as! AXUIElement, kAXChildrenAttribute).map { text($0, kAXTitleAttribute) ?? "?" }
+        say("PROBE \(tag): menus \(titles)")
+    } else {
+        say("PROBE \(tag): no menu bar through Accessibility")
+    }
+    say("PROBE \(tag): profile menu \(profileMenu().map { text($0, kAXTitleAttribute) ?? "" })")
+    say("PROBE \(tag): its identifiers \(profileMenu().map { text($0, "AXIdentifier") ?? "-" })")
+
+    choose(0, "first entry")
+    choose(1, "second entry")
+
+    // From behind another app.
+    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    choose(2, "third entry, Calculator in front")
+    if !isInFront(app) {
+        app.activate(options: [])
+        pause(1.5)
+        say("PROBE \(tag): asked forward after that: in front: \(whoIsInFront())")
     }
 
-    _ = bringToFront("Finder", "com.apple.finder")
+    // The profile's window is in the Dock.
+    if let main = axWindows(app).first(where: isMain) {
+        AXUIElementSetAttributeValue(main, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+        pause(2)
+        windowLines(tag, "its window minimized", app)
+        choose(2, "third entry, its window minimized")
+    }
+
+    // The profile has no window.
+    if let main = axWindows(app).first(where: isMain), let button = value(main, kAXCloseButtonAttribute) {
+        AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+        pause(2)
+        windowLines(tag, "its window closed", app)
+        say("PROBE \(tag): profile menu now \(profileMenu().map { text($0, kAXTitleAttribute) ?? "" })")
+        choose(2, "third entry, its window closed")
+    }
+
+    // Without the menu: one window raised through Accessibility, then the app
+    // asked forward.
+    _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    if let other = axWindows(app).first(where: { !isMain($0) }) {
+        let wanted = text(other, kAXTitleAttribute) ?? "?"
+        let raised = AXUIElementPerformAction(other, kAXRaiseAction as CFString)
+        app.activate(options: [])
+        pause(2)
+        say("PROBE \(tag): raised \"\(wanted)\" (error \(raised.rawValue)) and asked the app forward")
+        windowLines(tag, "after raising", app)
+    }
+
+    _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
     launch("Default", nil)
     pause(5)
-    windows("started again with the first profile and no address")
-
-    for instance in NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.edgemac") {
-        instance.forceTerminate()
-    }
-    pause(2)
-    try? FileManager.default.removeItem(atPath: data)
+    windowLines(tag, "started again with the first profile and no address", app)
+    calculator.terminate()
 }
 
-func probeModes() {
-    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
-    dumpDock("normal")
-    let missionControl = "/System/Applications/Mission Control.app/Contents/MacOS/Mission Control"
-    for (label, arguments) in [("mission control", []), ("app expose", ["2"]), ("show desktop", ["1"])] {
-        run(missionControl, arguments)
-        pause(2)
-        dumpDock(label)
-        say("PROBE \(label): \(state(of: calculator))")
-        click(calculator)
-        pause(2)
-        dumpDock("\(label), after a click on the icon")
-        say("PROBE \(label), after a click on the icon: \(state(of: calculator))")
-        for keyDown in [true, false] {
-            CGEvent(keyboardEventSource: mouse, virtualKey: 53, keyDown: keyDown)?.post(tap: .cghidEventTap)
+func probeFirefox() {
+    let binary = "/Applications/Firefox.app/Contents/MacOS/firefox"
+    guard FileManager.default.fileExists(atPath: binary) else {
+        say("PROBE firefox: not installed")
+        return
+    }
+    let base = FileManager.default.temporaryDirectory
+        .appendingPathComponent("supersurfer-firefox-probe-\(ProcessInfo.processInfo.processIdentifier)")
+    func instances() -> [NSRunningApplication] {
+        return NSRunningApplication.runningApplications(withBundleIdentifier: "org.mozilla.firefox")
+    }
+    func launch(_ profile: String, _ more: [String]) {
+        let folder = base.appendingPathComponent(profile)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let quiet = [
+            "user_pref(\"browser.shell.checkDefaultBrowser\", false);",
+            "user_pref(\"browser.aboutwelcome.enabled\", false);",
+            "user_pref(\"datareporting.policy.dataSubmissionEnabled\", false);",
+            "user_pref(\"browser.startup.homepage_override.mstone\", \"ignore\");",
+        ].joined(separator: "\n")
+        try? quiet.write(to: folder.appendingPathComponent("user.js"), atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = ["--profile", folder.path] + more
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            say("PROBE firefox: started with profile \(profile) and \(more), pid \(process.processIdentifier)")
+        } catch {
+            say("PROBE firefox: could not start: \(error.localizedDescription)")
         }
+    }
+    func report(_ label: String) {
+        let all = instances()
+        let icons = appIcons().filter { $0.title.contains("Firefox") }.count
+        say("PROBE firefox, \(label): \(all.count) running, Dock icons: \(icons), in front: \(whoIsInFront())")
+        for instance in all {
+            let pid = instance.processIdentifier
+            let arguments = outputOf("/bin/ps", ["-ww", "-o", "args=", "-p", "\(pid)"])
+            say("PROBE firefox, \(label):   pid \(pid), \(windowsOnScreen(instance)) windows on screen: \(arguments)")
+            for window in axWindows(instance) {
+                say("PROBE firefox, \(label):     \"\(text(window, kAXTitleAttribute) ?? "?")\"")
+            }
+        }
+    }
+    defer {
+        for instance in instances() {
+            instance.forceTerminate()
+        }
+        pause(2)
+        try? FileManager.default.removeItem(at: base)
+    }
+
+    launch("one", ["--new-instance", "about:blank"])
+    guard waitUntil(60, { instances().contains { windowsOnScreen($0) > 0 } }) else {
+        say("PROBE firefox: no window after 60 s")
+        report("no window")
+        return
+    }
+    pause(5)
+    report("one profile")
+    launch("two", ["--new-instance", "about:blank"])
+    pause(12)
+    report("two profiles")
+
+    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    for instance in instances() {
+        instance.activate(options: [])
         pause(1.5)
+        say("PROBE firefox: asked pid \(instance.processIdentifier) forward: in front: \(whoIsInFront())")
         _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    }
+
+    launch("one", [])
+    pause(8)
+    report("started again with the first profile and no address")
+    calculator.terminate()
+}
+
+/// A helper app in the Dock that only runs a script: how long from the click
+/// until the script runs, and what does the Dock make of it?
+func probeStub(_ path: String, _ marker: String) {
+    let wanted = URL(fileURLWithPath: path).lastPathComponent
+    var found: Icon?
+    let there = waitUntil(30) {
+        found = appIcons().first { $0.url?.lastPathComponent == wanted }
+        return found != nil
+    }
+    guard there, let stub = found, let spot = stub.centre else {
+        say("PROBE stub: the Dock does not show \(wanted); it shows \(appIcons().map { $0.title })")
+        return
+    }
+    say("PROBE stub: in the Dock as \"\(stub.title)\" at \(Int(spot.x)),\(Int(spot.y))")
+    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    for round in 1...3 {
+        try? FileManager.default.removeItem(atPath: marker)
+        post(.mouseMoved, at: spot)
+        pause(0.3)
+        let took = press(at: spot)
+        let released = ProcessInfo.processInfo.systemUptime
+        var ran: TimeInterval?
+        while ProcessInfo.processInfo.systemUptime - released < 10 {
+            if FileManager.default.fileExists(atPath: marker) {
+                ran = ProcessInfo.processInfo.systemUptime - released
+                break
+            }
+            usleep(2_000)
+        }
+        let after = ran.map { String(format: "%.0f ms after the button came up", $0 * 1000) } ?? "not within 10 s"
+        say("PROBE stub, click \(round): " + String(format: "button down for %.0f ms, the script ran ", took * 1000)
+            + after)
+        for wait in [0.2, 0.8, 2.0] {
+            pause(wait)
+            let running = (value(stub.element, "AXIsApplicationRunning") as? Bool).map { "\($0)" } ?? "not said"
+            say("PROBE stub, click \(round): later, shown as running: \(running), in front: \(whoIsInFront())")
+        }
     }
     calculator.terminate()
 }
 
 switch CommandLine.arguments.dropFirst().first {
-case "probe-modes":
-    probeModes()
-case "probe-desktop":
-    probeShowDesktop()
 case "probe-edge":
-    probeEdge()
+    probeChromium("edge", "/Applications/Microsoft Edge.app", "Microsoft Edge", "com.microsoft.edgemac")
+case "probe-chrome":
+    probeChromium("chrome", "/Applications/Google Chrome.app", "Google Chrome", "com.google.Chrome")
+case "probe-firefox":
+    probeFirefox()
+case "probe-stub":
+    let arguments = Array(CommandLine.arguments.dropFirst(2))
+    if arguments.count == 2 {
+        probeStub(arguments[0], arguments[1])
+    }
 case "preflight":
     preflight()
 case "control":

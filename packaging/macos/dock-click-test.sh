@@ -52,9 +52,51 @@ restore_choice() {
   fi
 }
 
+# TEMPORARY: a helper app in the Dock that only runs a script. Restarts the
+# Dock, so it comes last, whatever became of the tests.
+PROBE_STUB=no
+probe_stub() {
+  local stub="$SCRATCH/EdgeWork.app"
+  mkdir -p "$stub/Contents/MacOS"
+  cat > "$stub/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>stub</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.supersurfer.probe.stub</string>
+	<key>CFBundleName</key>
+	<string>EdgeWork</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>
+PLIST
+  printf '#!/bin/sh\n: > "%s"\n' "$SCRATCH/stub-ran" > "$stub/Contents/MacOS/stub"
+  chmod +x "$stub/Contents/MacOS/stub"
+  defaults write com.apple.dock persistent-apps -array-add "<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>$stub</string><key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>"
+  killall Dock
+  sleep 6
+  "$DRIVER" probe-stub "$stub" "$SCRATCH/stub-ran"
+  local round
+  for round in 1 2 3; do
+    echo "PROBE stub: what one call of open costs, $round:"
+    ( time /usr/bin/open -g -a Finder ) 2>&1 | grep real
+  done
+}
+
 cleanup() {
   stop_app
   restore_choice
+  if [ "$PROBE_STUB" = yes ]; then
+    PROBE_STUB=no
+    echo "== probe: a helper app in the Dock"
+    probe_stub || true
+  fi
   rm -rf "$SCRATCH"
 }
 trap cleanup EXIT
@@ -102,10 +144,11 @@ echo "== without SuperSurfer"
 "$DRIVER" control
 
 # TEMPORARY
-echo "== probe: Show Desktop"
-"$DRIVER" probe-desktop || true
-echo "== probe: Edge profiles"
+PROBE_STUB=yes
+echo "== probe: browser profiles"
 "$DRIVER" probe-edge || true
+"$DRIVER" probe-chrome || true
+"$DRIVER" probe-firefox || true
 
 # Finishes first-run setup for the scratch HOME, so the app does not open the
 # manual in a browser when it starts.
