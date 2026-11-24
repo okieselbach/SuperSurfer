@@ -105,6 +105,7 @@ SuperSurfer stays loaded on macOS, so a link is routed in a fraction of a millis
 - **Choose Browser for Copied Link…** — the picker for the link in the clipboard.
 - **Edit config.js**, **Show Config Folder**, **Show Decision Log**, **Reload Configuration**.
 - **Dock Click** — optional, and not about links: a click on the Dock icon of the app in front hides the app or minimizes its windows. See [Dock Click](#dock-click).
+- **Dock Shortcuts** — optional, and not about links either: an icon in the Dock for one profile of Edge or Chrome. See [Dock Shortcuts](#dock-shortcuts).
 - **Launch at Login** (macOS 13 or later).
 
 Changes to `config.js` take effect with the next link; there is nothing to restart. If the file has an error, links keep following the last version that worked and the icon turns into a warning triangle. Newly installed browsers and new browser profiles are noticed in the background within a few minutes; **Reload Configuration** re-reads everything at once.
@@ -141,6 +142,20 @@ It is off by default and unrelated to routing links.
 - Windows on other Spaces and full-screen windows are not minimized.
 
 macOS ties the permission to the app's signature. Releases are not signed with a Developer ID yet, so expect to give it again after an update: remove SuperSurfer from the Accessibility list and add it again.
+
+### Dock Shortcuts
+
+An icon in the Dock for one browser profile, the way the Windows taskbar has them. It works with Microsoft Edge and Google Chrome.
+
+1. Choose **Dock Shortcuts** in the menu, and there the profile. SuperSurfer makes a small app for it, for example "Edge Work", and shows it in the Finder.
+2. Drag that app into the Dock.
+
+A click on it brings the window of that profile to the front. If the profile has no window, the browser opens one. If the browser is not running, it starts with that profile.
+
+- The first time, macOS asks for the Accessibility permission: System Settings → Privacy & Security → **Accessibility**, switch on SuperSurfer. Without it every click opens a new window instead of bringing the one that is there forward, and the menu entry shows ⚠︎.
+- The shortcut is an extra icon, not the browser. While the browser runs, its own icon is in the Dock as well.
+- To get rid of a shortcut, choose its profile under **Dock Shortcuts** again and then **Remove Shortcut**. The Dock keeps a question mark where it was; drag that out.
+- A shortcut keeps working when its profile is renamed. Remove it and make it again if the new name should be on it.
 
 ## Saved rules
 
@@ -179,6 +194,8 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 **"Apple could not verify…" when opening the app (macOS)** — run `xattr -cr /Applications/SuperSurfer.app` once after downloading.
 
 **Dock Click does nothing (macOS)** — the menu entry shows ⚠︎ while the Accessibility permission is missing. If System Settings shows SuperSurfer as switched on, the permission belongs to an older build: remove SuperSurfer from the list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
+
+**A Dock shortcut opens a new window every time (macOS)** — the Accessibility permission is missing or belongs to an older build; the entry above says how to give it again. If the permission is there, the browser lists the profile in its *Profiles* menu under a name SuperSurfer does not expect. `log show --last 5m --predicate 'process == "SuperSurfer"'` shows which names it saw.
 
 **No menu bar icon (macOS)** — start the app with `open -a SuperSurfer`. If the icon was dragged out of the menu bar, this also brings it back.
 
