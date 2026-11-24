@@ -1114,9 +1114,6 @@ func testShortcuts(_ browser: TestBrowser, home: String, superSurfer: String, on
         say("ok    \(browser.shortName) \(profile).app is there")
         pause(1)
     }
-    // TEMPORARY
-    dumpIcon(bundle(second))
-    dumpIcon(bundle(third))
 
     var inDock: String?
     if onDock {
@@ -1261,49 +1258,6 @@ func testShortcuts(_ browser: TestBrowser, home: String, superSurfer: String, on
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
         pause(2)
         quit()
-    }
-}
-
-/// TEMPORARY: the icon macOS shows for a shortcut, as letters. "@" is one of
-/// the first two badge colours, "o" is white, "." anything else.
-func dumpIcon(_ path: String) {
-    let size = 44
-    guard let rep = NSBitmapImageRep(
-        bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4,
-        hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-    ), let context = NSGraphicsContext(bitmapImageRep: rep) else {
-        return
-    }
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = context
-    NSWorkspace.shared.icon(forFile: path).draw(
-        in: NSRect(x: 0, y: 0, width: size, height: size), from: .zero, operation: .sourceOver, fraction: 1
-    )
-    context.flushGraphics()
-    NSGraphicsContext.restoreGraphicsState()
-    let badges: [(CGFloat, CGFloat, CGFloat)] = [(0.00, 0.40, 0.85), (0.11, 0.53, 0.25)]
-    say("ICON \(path)")
-    for y in 0..<size {
-        var line = ""
-        for x in 0..<size {
-            guard let color = rep.colorAt(x: x, y: y) else {
-                line += "?"
-                continue
-            }
-            let red = color.redComponent
-            let green = color.greenComponent
-            let blue = color.blueComponent
-            if color.alphaComponent < 0.3 {
-                line += " "
-            } else if badges.contains(where: { abs($0.0 - red) < 0.08 && abs($0.1 - green) < 0.08 && abs($0.2 - blue) < 0.08 }) {
-                line += "@"
-            } else if red > 0.85 && green > 0.85 && blue > 0.85 {
-                line += "o"
-            } else {
-                line += "."
-            }
-        }
-        say("ICON " + line)
     }
 }
 
