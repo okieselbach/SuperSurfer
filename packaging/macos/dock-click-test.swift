@@ -1223,6 +1223,51 @@ func testShortcuts(_ browser: TestBrowser, home: String, superSurfer: String, on
     }
     say("      its title: \(mainWindowTitle(app))")
 
+    // TEMPORARY: how soon after a click does the Dock start the same
+    // shortcut again?
+    if onDock, let tracePath = ProcessInfo.processInfo.environment["SUPERSURFER_TRACE"] {
+        func asked() -> Int {
+            let text = (try? String(contentsOfFile: tracePath, encoding: .utf8)) ?? ""
+            return text.components(separatedBy: "\n").filter { $0.contains("asked for") }.count
+        }
+        let helper = "dev.supersurfer.shortcut.\(browser.id).Profile-1"
+        func helperSeen(within seconds: TimeInterval) -> Bool {
+            let end = Date().addingTimeInterval(seconds)
+            var seen = false
+            while Date() < end {
+                if !NSRunningApplication.runningApplications(withBundleIdentifier: helper).isEmpty {
+                    seen = true
+                }
+                pause(0.01)
+            }
+            return seen
+        }
+        let name = "\(browser.shortName) \(second).app"
+        for gap in [0.6, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0] {
+            pause(6)
+            guard let spot = appIcons().first(where: { $0.url?.lastPathComponent == name })?.centre else {
+                say("PROBE repeat: \(name) is not in the Dock")
+                continue
+            }
+            let before = asked()
+            click(at: spot)
+            let first = helperSeen(within: gap)
+            click(at: spot)
+            let second = helperSeen(within: 3)
+            say("PROBE repeat, \(gap) s apart: \(asked() - before) of 2 clicks reached SuperSurfer;"
+                + " the shortcut was seen running after the first: \(first), after the second: \(second)")
+        }
+        lastClick = nil
+        let strays = outputOf("/bin/ps", ["-axww", "-o", "pid=,args="])
+            .components(separatedBy: "\n")
+            .filter { line in
+                line.contains(browser.binary) && line.contains("--profile-directory=")
+                    && !line.contains("--user-data-dir") && !line.contains("--type=")
+            }
+        say("PROBE repeat: browsers started without the test's own profiles: \(strays)")
+        pause(2)
+    }
+
     say("-- a shortcut is removed in SuperSurfer's menu")
     chooseInDockShortcuts(
         [profileEntry(browser.name, third), entryTitled(["Remove Shortcut", "Verknüpfung entfernen"])],

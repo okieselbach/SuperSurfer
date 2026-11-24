@@ -111,7 +111,8 @@ sleep 1
 STATUS=0
 for BROWSER in edge chrome; do
   echo "== dock shortcuts: $BROWSER"
-  "$DRIVER" shortcuts "$BROWSER" "$SCRATCH" "$APP" ${EXTRAS[@]+"${EXTRAS[@]}"} || STATUS=$?
+  # TEMPORARY: the trace, for a look at clicks in quick succession.
+  SUPERSURFER_TRACE="$TRACE" "$DRIVER" shortcuts "$BROWSER" "$SCRATCH" "$APP" ${EXTRAS[@]+"${EXTRAS[@]}"} || STATUS=$?
   if [ "$STATUS" -ne 0 ]; then
     break
   fi
