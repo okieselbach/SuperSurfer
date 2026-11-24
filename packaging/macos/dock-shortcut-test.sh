@@ -130,9 +130,10 @@ fi
 # should have had to. Reading the log needs an administrator; where that
 # fails, nothing is concluded.
 NOTE="could not reach SuperSurfer"
-ALONE="$(log show --last 15m --predicate "eventMessage CONTAINS \"$NOTE\"" 2>/dev/null | grep -c "$NOTE" || true)"
-if [ "${ALONE:-0}" -gt 0 ]; then
-  echo "FAIL: $ALONE time(s) a shortcut could not reach SuperSurfer and opened a window by itself" >&2
+ALONE="$(log show --last 15m --style compact --predicate "eventMessage CONTAINS \"$NOTE\"" 2>/dev/null | grep "$NOTE" || true)"
+if [ -n "$ALONE" ]; then
+  echo "FAIL: a shortcut could not reach SuperSurfer and opened a window by itself:" >&2
+  printf '%s\n' "$ALONE" >&2
   exit 1
 fi
 

@@ -91,8 +91,8 @@ enum ProfileShortcutRules {
 
     /// What a shortcut runs. It asks the copy of SuperSurfer that wrote it,
     /// then whichever copy macOS knows. If neither can be reached it says so
-    /// in the system log and opens a window of the profile itself, so a
-    /// shortcut never does nothing.
+    /// in the system log, with what `open` had to say about it, and opens a
+    /// window of the profile itself, so a shortcut never does nothing.
     static func script(link: String, superSurfer: String, browserPath: String, launchArguments: [String]) -> String {
         var direct = ["/usr/bin/open", "-n", "-a", shellQuoted(browserPath)]
         if !launchArguments.isEmpty {
@@ -103,9 +103,9 @@ enum ProfileShortcutRules {
         #!/bin/sh
         # Written by SuperSurfer for a browser profile in the Dock.
         link=\(shellQuoted(link))
-        /usr/bin/open -g -a \(shellQuoted(superSurfer)) "$link" 2>/dev/null && exit 0
-        /usr/bin/open -g "$link" 2>/dev/null && exit 0
-        /usr/bin/logger -t SuperSurfer "\(unreachableNote)"
+        first=$(/usr/bin/open -g -a \(shellQuoted(superSurfer)) "$link" 2>&1) && exit 0
+        second=$(/usr/bin/open -g "$link" 2>&1) && exit 0
+        /usr/bin/logger -t SuperSurfer "\(unreachableNote) $link: $first / $second"
         exec \(direct.joined(separator: " "))
 
         """
@@ -892,8 +892,8 @@ final class ProfileShortcuts {
             "dock shortcut: the script asks SuperSurfer and can do without it",
             script.hasPrefix("#!/bin/sh\n")
                 && script.contains("\nlink='supersurfer://profile/edge/Profile%201'\n")
-                && script.contains("\n/usr/bin/open -g -a '/Applications/SuperSurfer.app' \"$link\" 2>/dev/null && exit 0\n")
-                && script.contains("\n/usr/bin/logger -t SuperSurfer \"\(Rules.unreachableNote)\"\n")
+                && script.contains("\nfirst=$(/usr/bin/open -g -a '/Applications/SuperSurfer.app' \"$link\" 2>&1) && exit 0\n")
+                && script.contains("\n/usr/bin/logger -t SuperSurfer \"\(Rules.unreachableNote) $link: $first / $second\"\n")
                 && script.hasSuffix(
                     "\nexec /usr/bin/open -n -a '/Applications/Microsoft Edge.app' --args '--profile-directory=Profile 1'\n"
                 )
