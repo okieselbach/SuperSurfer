@@ -201,7 +201,8 @@ final class DockClickController {
     /// handling of the click. That is when the Dock activates the app, and
     /// activating an app brings it straight back if it was hidden a moment
     /// too early.
-    private static let settleTime: TimeInterval = 0.12
+    private static let settleTime: TimeInterval = ProcessInfo.processInfo
+        .environment["SUPERSURFER_DOCK_CLICK_SETTLE"].flatMap { Double($0) } ?? 0.12
     /// The Dock answers in well under a millisecond. Nothing waits longer
     /// than this for it, or for an app that is asked about its windows.
     private static let answerTimeout: Float = 0.4
