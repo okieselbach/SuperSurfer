@@ -838,10 +838,13 @@ final class DockClickController {
     }
 
     /// Whether the Dock is showing more than its bar: Mission Control or App
-    /// Exposé. There a click on a Dock icon leaves the mode and shows the
-    /// app, so it is a request to see the app. The Dock draws these modes
-    /// itself and shows each to Accessibility as a group next to its list of
-    /// icons (seen on macOS 15 and 26 as "mc" and "appexpose").
+    /// Exposé, which it draws itself and shows to Accessibility as a group
+    /// next to its list of icons (seen on macOS 15 and 26 as "mc" and
+    /// "appexpose"). A force click on an icon opens App Exposé; by the time
+    /// the button comes up the click has done its work, and putting the app
+    /// away on top of that would undo it. A click made while one of the
+    /// modes is already up rarely gets this far: there the window server
+    /// names another window than the Dock's bar as the one that was clicked.
     private static func showsExpose(_ dock: AXUIElement) -> Bool {
         guard let children = AX.value(dock, kAXChildrenAttribute) as? [AXUIElement] else {
             return false
