@@ -11,7 +11,7 @@ pub fn config_dir() -> Result<PathBuf> {
     let dirs = ProjectDirs::from("", "", "SuperSurfer")
         .context("could not resolve SuperSurfer config directory")?;
     let dir = dirs.config_dir().to_path_buf();
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     restrict_dir(&dir);
     Ok(dir)
 }
@@ -22,7 +22,7 @@ pub fn config_path() -> Result<PathBuf> {
 
 pub fn cache_dir() -> Result<PathBuf> {
     let dir = config_dir()?.join("cache");
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     restrict_dir(&dir);
     Ok(dir)
 }
@@ -47,10 +47,12 @@ pub fn write_scaffold(force: bool) -> Result<(PathBuf, scaffold::ScaffoldPlan)> 
         );
     }
 
-    fs::write(&types, types_stub())?;
+    fs::write(&types, types_stub())
+        .with_context(|| format!("failed to write {}", types.display()))?;
     restrict_file(&types);
     let plan = scaffold::plan()?;
-    fs::write(&config, scaffold::render(&plan))?;
+    fs::write(&config, scaffold::render(&plan))
+        .with_context(|| format!("failed to write {}", config.display()))?;
     restrict_file(&config);
     Ok((config, plan))
 }

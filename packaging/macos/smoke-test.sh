@@ -4,7 +4,9 @@
 #
 #   1. --self-test: the Swift binary and the Rust core linked into it agree
 #      on the JSON they exchange.
-#   2. The app starts, stays loaded, receives a link the way macOS delivers
+#   2. First-run setup gets past a browser profile list it may not read,
+#      which is what every browser's data looks like on macOS 27 and later.
+#   3. The app starts, stays loaded, receives a link the way macOS delivers
 #      it to the default browser, routes it and hands it to Safari.
 #
 # Everything runs against a scratch HOME; the real configuration, rules and
@@ -66,19 +68,45 @@ case "$HELP" in
     ;;
 esac
 
+echo "== first run next to a browser profile list that may not be read"
+# macOS 27 and later refuse apps the data of browsers: the file with the
+# profile names is there, and opening it fails. Setup once stopped right
+# there. A file without read permission gives the same answer on any macOS.
+CHROME_DATA="$SCRATCH/Library/Application Support/Google/Chrome"
+mkdir -p "$CHROME_DATA"
+echo '{"profile":{"info_cache":{"Default":{"name":"Personal"}}}}' > "$CHROME_DATA/Local State"
+chmod 000 "$CHROME_DATA/Local State"
+
+# This also finishes first-run setup for the scratch HOME. Otherwise the app
+# would open the manual in the system's browser on start, and "Safari is
+# running" below would prove nothing about the routed link.
+if ! FIRST_RUN="$(HOME="$SCRATCH" "$BIN" doctor 2>&1)"; then
+  echo "$FIRST_RUN" >&2
+  echo "FAIL: first run stopped at a profile list it may not read" >&2
+  exit 1
+fi
+echo "$FIRST_RUN" | sed 's/^/doctor:  /'
+if [ ! -f "$SUPPORT/config.js" ]; then
+  echo "FAIL: first run did not write config.js" >&2
+  exit 1
+fi
+if [ -d "/Applications/Google Chrome.app" ] && [ "$(id -u)" != 0 ]; then
+  case "$FIRST_RUN" in
+    *"profiles: not readable"*) ;;
+    *)
+      echo "FAIL: doctor does not say that Chrome's profiles are not readable" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 echo "== resident app"
-mkdir -p "$SUPPORT"
 cat > "$SUPPORT/config.js" <<'CONFIG'
 export default {
   defaultBrowser: "safari",
   handlers: [],
 };
 CONFIG
-
-# Finishes first-run setup for the scratch HOME. Otherwise the app would open
-# the manual in the system's browser on start, and "Safari is running" below
-# would prove nothing about the routed link.
-HOME="$SCRATCH" "$BIN" doctor
 
 SAFARI_WAS_RUNNING=no
 if app_is_running com.apple.Safari; then

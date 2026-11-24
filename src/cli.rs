@@ -237,6 +237,7 @@ fn cmd_doctor() -> Result<()> {
         println!("  status: loaded from {}", router.config_path().display());
         println!();
         println!("Detected browsers:");
+        let unreadable = router.registry().unreadable_profiles();
         for browser in router.registry().list() {
             println!("  - {}", browser.id);
             if let Some(app) = &browser.app_path {
@@ -249,6 +250,16 @@ fn cmd_doctor() -> Result<()> {
                     profile.directory.as_deref().unwrap_or("-")
                 );
             }
+            if let Some(failure) = unreadable.iter().find(|f| f.browser_id == browser.id) {
+                println!("      profiles: not readable ({})", failure.reason);
+            }
+        }
+        if unreadable.iter().any(|failure| failure.denied) {
+            println!();
+            println!(
+                "Profiles: {}",
+                crate::browser::registry::DENIED_PROFILES_HINT
+            );
         }
     }
     println!();

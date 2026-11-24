@@ -70,6 +70,8 @@ struct BrowsersReply: Decodable {
     let error: String?
     let defaultBrowserId: String?
     let browsers: [BrowserInfo]?
+    /// Names of browsers whose profile list macOS would not let us read.
+    let profilesBlocked: [String]?
 }
 
 struct RuleInfo: Decodable {

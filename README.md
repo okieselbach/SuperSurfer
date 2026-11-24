@@ -36,6 +36,7 @@ Then register SuperSurfer as the default browser and try a dry-run:
 **macOS** — unzip into `/Applications`, then:
 
 ```bash
+xattr -cr /Applications/SuperSurfer.app    # once per download: the app is not notarized yet
 /Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer register
 /Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer test https://github.com/org/repo
 ```
@@ -111,6 +112,8 @@ The menu:
 If `config.js` stops loading — a typo, a half-saved file — links keep following the last version that worked, and the menu bar icon turns into a warning triangle until the file loads again. If it has never loaded in this run, links open in Safari rather than nowhere.
 
 The icon can be dragged out of the menu bar with ⌘ held. Opening the app again (`open -a SuperSurfer`, Spotlight, Finder) brings it back and shows the menu.
+
+macOS 27 and later keep apps away from browser data, which includes the names of browser profiles. Links are routed all the same; the menu then shows **⚠︎ Browser profiles cannot be read** and says how to allow access. Until then a Chromium profile is only found when named by its folder (`"edge:Profile 1"`). Details: [manual](docs/manual.md#browser-profiles-on-macos-27-and-later).
 
 ### Picker
 
@@ -358,7 +361,7 @@ v0.2.x is usable as a default browser on macOS, Windows, and Linux:
 - macOS, Windows, and Linux browser discovery + launch
 - CLI: `init`, `doctor`, `test`, `rules`, `logs`
 
-**Not yet:** signed/notarized distribution, signed rules updates. macOS Gatekeeper will warn on first open until the app is notarized — right-click → Open, or `xattr -cr /Applications/SuperSurfer.app`.
+**Not yet:** signed/notarized distribution, signed rules updates. Until the app is notarized, macOS refuses to open a downloaded copy — run `xattr -cr /Applications/SuperSurfer.app` once, or allow it under System Settings → Privacy & Security → Open Anyway. Without a Developer ID signature, macOS also forgets the permission to read browser profiles (macOS 27 and later) with every update.
 
 ## License
 

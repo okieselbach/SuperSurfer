@@ -68,17 +68,64 @@ fn plant_browsers(home: &std::path::Path) {
             .unwrap();
         }
     }
-    let chrome_data = if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/Google/Chrome")
-    } else {
-        home.join(".config/google-chrome")
-    };
+    let chrome_data = chrome_data_dir(home);
     fs::create_dir_all(&chrome_data).unwrap();
     fs::write(
         chrome_data.join("Local State"),
         r#"{"profile":{"info_cache":{"Default":{"name":"Personal"},"Profile 1":{"name":"Work"}}}}"#,
     )
     .unwrap();
+}
+
+fn chrome_data_dir(home: &std::path::Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Google/Chrome")
+    } else {
+        home.join(".config/google-chrome")
+    }
+}
+
+/// Chrome's profile list, taken away for one test. It comes back however the
+/// test ends, because every test shares the sandbox.
+struct ProfileListTaken {
+    path: PathBuf,
+    content: Vec<u8>,
+}
+
+impl ProfileListTaken {
+    fn remember() -> Self {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("the sandbox sets HOME"));
+        let path = chrome_data_dir(&home).join("Local State");
+        let content = fs::read(&path).expect("the sandbox plants Chrome's profile list");
+        ProfileListTaken { path, content }
+    }
+
+    /// A directory where the file should be: it exists, and reading it
+    /// fails. macOS 27 looks like this from the inside, where `stat` on
+    /// another app's browser data succeeds and `open` is refused.
+    fn by_a_directory() -> Self {
+        let taken = Self::remember();
+        fs::remove_file(&taken.path).unwrap();
+        fs::create_dir(&taken.path).unwrap();
+        taken
+    }
+
+    /// File mode 000: a real "permission denied". `None` when this user
+    /// reads the file anyway, as root does.
+    fn by_file_mode() -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        let taken = Self::remember();
+        fs::set_permissions(&taken.path, fs::Permissions::from_mode(0o000)).unwrap();
+        fs::read(&taken.path).is_err().then_some(taken)
+    }
+}
+
+impl Drop for ProfileListTaken {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.path);
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::write(&self.path, &self.content);
+    }
 }
 
 fn config_path() -> PathBuf {
@@ -218,7 +265,13 @@ fn reply_shapes_match_what_the_app_decodes() {
     let reply = call(&mut engine, json!({ "op": "browsers" }));
     assert_eq!(
         keys(&reply),
-        ["browsers", "defaultBrowserId", "error", "ok"]
+        [
+            "browsers",
+            "defaultBrowserId",
+            "error",
+            "ok",
+            "profilesBlocked"
+        ]
     );
     assert_eq!(
         keys(&reply["browsers"][0]),
@@ -615,6 +668,147 @@ fn profiles_are_listed_and_turned_into_launch_arguments() {
         reply["launch"]["args"],
         json!(["--profile-directory=Default", "--incognito"])
     );
+}
+
+#[test]
+fn a_profile_list_that_cannot_be_read_does_not_stop_anything() {
+    let (sandbox, _guard) = sandbox();
+    if !sandbox.browsers.iter().any(|id| id == "chrome") {
+        eprintln!("skipped: Google Chrome is not installed on this machine");
+        return;
+    }
+    let mut engine = engine_with_default("chrome:Profile 1");
+    let listed = |engine: &mut Engine| -> (Value, Value) {
+        let reply = call(engine, json!({ "op": "browsers" }));
+        assert_eq!(reply["ok"], true, "{reply}");
+        let chrome = reply["browsers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|browser| browser["id"] == "chrome")
+            .expect("Chrome stays listed");
+        (chrome["profiles"].clone(), reply["profilesBlocked"].clone())
+    };
+    // A complete scan first. macOS keeps a copy of it on disk.
+    assert_eq!(
+        listed(&mut engine),
+        (json!(["Personal", "Work"]), json!([]))
+    );
+
+    let taken = ProfileListTaken::by_a_directory();
+    // Look again now rather than when the browser list has aged.
+    let status = call(&mut engine, json!({ "op": "reload" }));
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["configError"], Value::Null, "{status}");
+
+    // macOS falls back to the profiles of the last complete scan; Linux has
+    // no such copy and scans from scratch every time.
+    let remembered = cfg!(target_os = "macos");
+    let (profiles, blocked) = listed(&mut engine);
+    let expected = if remembered {
+        json!(["Personal", "Work"])
+    } else {
+        json!([])
+    };
+    assert_eq!(profiles, expected);
+    // The file is damaged, not refused, so there is no permission to ask for.
+    assert_eq!(blocked, json!([]));
+
+    // A profile named by its folder needs no list.
+    let reply = route(&mut engine, "https://example.com/");
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["decision"]["browserId"], "chrome");
+    assert_eq!(reply["decision"]["profile"], "Profile 1");
+    assert_eq!(
+        reply["launch"]["args"],
+        json!(["--profile-directory=Profile 1"])
+    );
+
+    // A profile named the way Chrome shows it does. Without the list the
+    // link still opens, in whichever profile Chrome used last.
+    write_config("chrome:Work", "");
+    call(&mut engine, json!({ "op": "reload" }));
+    let reply = route(&mut engine, "https://example.com/");
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["decision"]["profile"], "Work");
+    let expected = if remembered {
+        json!(["--profile-directory=Profile 1"])
+    } else {
+        json!([])
+    };
+    assert_eq!(reply["launch"]["args"], expected);
+
+    drop(taken);
+    call(&mut engine, json!({ "op": "reload" }));
+    assert_eq!(
+        listed(&mut engine),
+        (json!(["Personal", "Work"]), json!([]))
+    );
+    let reply = route(&mut engine, "https://example.com/");
+    assert_eq!(
+        reply["launch"]["args"],
+        json!(["--profile-directory=Profile 1"])
+    );
+}
+
+#[test]
+fn a_refused_profile_list_is_reported_as_blocked() {
+    let (sandbox, _guard) = sandbox();
+    if !sandbox.browsers.iter().any(|id| id == "chrome") {
+        eprintln!("skipped: Google Chrome is not installed on this machine");
+        return;
+    }
+    let Some(taken) = ProfileListTaken::by_file_mode() else {
+        eprintln!("skipped: this user reads files whatever their mode");
+        return;
+    };
+    let mut engine = engine_with_default("chrome");
+
+    let reply = call(&mut engine, json!({ "op": "browsers" }));
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["profilesBlocked"], json!(["Google Chrome"]));
+    assert_eq!(reply["browsers"][0]["id"], "chrome");
+
+    let routed = route(&mut engine, "https://example.com/");
+    assert_eq!(routed["ok"], true, "{routed}");
+    assert_eq!(routed["decision"]["browserId"], "chrome");
+    assert!(routed["launch"].is_object(), "{routed}");
+
+    drop(taken);
+    call(&mut engine, json!({ "op": "reload" }));
+    let reply = call(&mut engine, json!({ "op": "browsers" }));
+    assert_eq!(reply["profilesBlocked"], json!([]));
+    assert_eq!(
+        reply["browsers"][0]["profiles"],
+        json!(["Personal", "Work"])
+    );
+}
+
+/// What happened on the first Mac with macOS 27: setup stopped at the first
+/// profile list it was not allowed to read, before `config.js` was written.
+#[test]
+fn first_run_setup_gets_past_a_profile_list_it_cannot_read() {
+    let (sandbox, _guard) = sandbox();
+    if !sandbox.browsers.iter().any(|id| id == "chrome") {
+        eprintln!("skipped: Google Chrome is not installed on this machine");
+        return;
+    }
+    let _taken = ProfileListTaken::by_a_directory();
+    // As on a machine SuperSurfer has never run on.
+    let config = config_path();
+    fs::remove_dir_all(config.parent().unwrap()).unwrap();
+
+    let mut engine = Engine::new();
+    let status = call(&mut engine, json!({ "op": "status" }));
+    assert_eq!(status["ok"], true, "{status}");
+    assert_eq!(status["freshBootstrap"], true, "{status}");
+    assert_eq!(status["configError"], Value::Null, "{status}");
+    assert!(config.exists(), "first run writes config.js");
+
+    let reply = route(&mut engine, "https://example.com/");
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["decision"]["source"], "default");
+    assert!(reply["launch"].is_object(), "{reply}");
 }
 
 #[test]
