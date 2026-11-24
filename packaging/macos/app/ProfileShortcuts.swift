@@ -257,9 +257,15 @@ enum ShortcutIcon {
 
     /// Where the badge sits in an icon `side` wide. AppKit counts upwards, so
     /// a small y is the bottom.
+    ///
+    /// It stays inside the rounded square that app icons fill, which leaves a
+    /// tenth of the picture free on every side. A badge that reaches into
+    /// that margin makes macOS 26 take the icon for one of the old, freely
+    /// shaped kind: it shrinks the whole picture and puts it on a square of
+    /// its own, and the badge is too small to read.
     static func badgeFrame(side: CGFloat) -> NSRect {
-        let diameter = side * 0.46
-        return NSRect(x: side - diameter - side * 0.02, y: side * 0.02, width: diameter, height: diameter)
+        let diameter = side * 0.40
+        return NSRect(x: side * 0.88 - diameter, y: side * 0.12, width: diameter, height: diameter)
     }
 
     static func bitmap(appPath: String, badge: String, color: Int, pixels: Int) -> NSBitmapImageRep? {
@@ -738,13 +744,19 @@ final class ProfileShortcuts {
         if browser.isHidden {
             browser.unhide()
         }
+        let found = ProcessInfo.processInfo.systemUptime
         switch ProfileShortcuts.pressProfileEntry(of: browser.processIdentifier, titled: titles, named: name) {
         case .pressed(let title):
-            ProfileShortcuts.bringForward(browser)
-            let took = (ProcessInfo.processInfo.systemUptime - asked) * 1000
+            let pressed = ProcessInfo.processInfo.systemUptime
+            // A browser that is behind another app comes forward by itself
+            // when its entry is chosen, a moment later. Asking for it at
+            // once saves that moment.
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier != browser.processIdentifier {
+                browser.activate(options: [])
+            }
             ProfileShortcuts.trace(String(
-                format: "%@: brought forward through the profile menu, entry \"%@\", %.0f ms after the shortcut asked",
-                shortcut.title, title, took
+                format: "%@: brought forward through the profile menu, entry \"%@\", %.0f ms after the shortcut asked, %.0f ms of them in the browser's menu",
+                shortcut.title, title, (pressed - asked) * 1000, (pressed - found) * 1000
             ))
         case .noEntry(let shown):
             // Worth a line in the system log: this is the case a person
@@ -816,18 +828,6 @@ final class ProfileShortcuts {
             }
         }
         return .noMenu
-    }
-
-    /// The browser comes forward by itself when its entry is chosen. This
-    /// waits for that for half a second and asks for it if it did not happen.
-    private static func bringForward(_ browser: NSRunningApplication) {
-        for _ in 0..<10 {
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == browser.processIdentifier {
-                return
-            }
-            usleep(50_000)
-        }
-        browser.activate(options: [])
     }
 
     /// With `--resident`, one line on stderr per shortcut that was clicked,
