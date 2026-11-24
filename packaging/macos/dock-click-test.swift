@@ -1057,9 +1057,7 @@ func testShortcuts(
     // title of the page tells whose window is in front. The profiles are
     // kept below the scratch HOME, where SuperSurfer looks for them.
     let profiles = [("Default", "sst-first"), ("Profile 1", "sst-second"), ("Profile 2", "sst-third")]
-    for (directory, page) in profiles {
-        let file = pages + "/\(page).html"
-        try? "<!doctype html><title>\(page)</title><p>\(page)</p>".write(toFile: file, atomically: true, encoding: .utf8)
+    func start(_ directory: String, showing file: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = [
@@ -1074,11 +1072,39 @@ func testShortcuts(
         } catch {
             stop("\(browser.name) did not start: \(error.localizedDescription)")
         }
-        let opened = waitUntil(40) {
+    }
+    /// What there is to see of the browser, for when it does not show what
+    /// it was started with.
+    func whatIsThere() -> String {
+        let titles = running().map { axWindows($0).map { text($0, kAXTitleAttribute) ?? "?" } } ?? []
+        let processes = outputOf("/bin/ps", ["-axww", "-o", "pid=,args="])
+            .components(separatedBy: "\n")
+            .filter { $0.contains(browser.binary) && !$0.contains("--type=") }
+        return "windows \(titles), processes \(processes)"
+    }
+    for (directory, page) in profiles {
+        let file = pages + "/\(page).html"
+        try? "<!doctype html><title>\(page)</title><p>\(page)</p>".write(toFile: file, atomically: true, encoding: .utf8)
+        start(directory, showing: file)
+        var opened = waitUntil(40) {
             running().map { window(of: $0, showing: page) != nil } ?? false
         }
+        if !opened && directory == "Default" {
+            // The first start of a browser on a test machine can go astray:
+            // it may be updating itself, or busy with whatever it does when
+            // it runs for the first time. Nothing depends on it yet, so it
+            // gets one more try from the beginning.
+            say("      \(browser.name) shows no window with \(page) after 40 s: \(whatIsThere())")
+            say("      once more from the beginning")
+            quit()
+            pause(3)
+            start(directory, showing: file)
+            opened = waitUntil(40) {
+                running().map { window(of: $0, showing: page) != nil } ?? false
+            }
+        }
         if !opened {
-            stop("\(browser.name) shows no window with \(page) for its profile folder \(directory)")
+            stop("\(browser.name) shows no window with \(page) for its profile folder \(directory): \(whatIsThere())")
         }
         pause(1)
     }
