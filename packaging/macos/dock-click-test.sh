@@ -125,7 +125,9 @@ for MODE in hide minimize; do
   sleep 1
 
   STATUS=0
-  "$DRIVER" "$MODE" || STATUS=$?
+  # The driver reads the trace: a click that SuperSurfer says it got too
+  # late to act on was lost on a slow machine, and is made again.
+  SUPERSURFER_TRACE="$TRACE" "$DRIVER" "$MODE" || STATUS=$?
   if command -v footprint >/dev/null 2>&1; then
     # What Activity Monitor shows in its Memory column, with Dock Click used.
     FOOTPRINT="$(footprint "$PID" 2>/dev/null || true)"
@@ -152,7 +154,7 @@ if ! wait_for 30 app_is_running dev.supersurfer.app; then
 fi
 sleep 1
 STATUS=0
-"$DRIVER" menu || STATUS=$?
+SUPERSURFER_TRACE="$TRACE" "$DRIVER" menu || STATUS=$?
 echo "stored: $(defaults read dev.supersurfer.app dockClick 2>/dev/null || echo nothing)"
 stop_app
 restore_choice

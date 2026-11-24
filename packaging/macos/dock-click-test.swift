@@ -165,16 +165,50 @@ func post(_ type: CGEventType, at point: CGPoint, count: Int64 = 1) {
 struct Clicked {
     let longestPress: TimeInterval
     let again: () -> Void
-    /// For a click that is known to be heard of somewhere when it works:
-    /// whether nothing was heard of it.
-    var unheard: (() -> Bool)?
+    /// For a click of which it can be told that it was lost on its way: what
+    /// became of it, or nil if it arrived.
+    var lost: (() -> String?)?
 
     var wasNoClick: Bool {
         return longestPress > 0.3
     }
+
+    /// Why this click may be made again, if it may. Only a click that never
+    /// counted as one is repeated. A click that arrived and did not do what
+    /// it should is what these tests are there to find.
+    var excuse: String? {
+        if wasNoClick {
+            return notAClick(self)
+        }
+        return lost?()
+    }
 }
 
 var lastClick: Clicked?
+
+/// Where SuperSurfer writes its trace, if the script said so.
+let tracePath = ProcessInfo.processInfo.environment["SUPERSURFER_TRACE"]
+
+func traceLines(with words: String) -> Int {
+    guard let path = tracePath, let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+        return 0
+    }
+    return text.components(separatedBy: "\n").filter { $0.contains(words) }.count
+}
+
+/// To be asked before a click on a Dock icon. Dock Click leaves a click alone
+/// that reaches it more than a quarter of a second after it was made, and
+/// says so in its trace. On a virtual machine that happens now and then, and
+/// such a click was lost before Dock Click had a say.
+func lateForSuperSurfer() -> (() -> String?)? {
+    guard tracePath != nil else {
+        return nil
+    }
+    let before = traceLines(with: "was left alone")
+    return {
+        traceLines(with: "was left alone") > before ? "SuperSurfer got this click too late to act on it" : nil
+    }
+}
 
 /// One click on the app's Dock icon, the way a hand does it: the pointer
 /// arrives and rests, the button goes down and comes up. A tap on a trackpad
@@ -185,8 +219,9 @@ func click(_ app: NSRunningApplication, held: TimeInterval = 0.08) {
     }
     post(.mouseMoved, at: spot)
     pause(0.3)
+    let late = lateForSuperSurfer()
     let took = press(at: spot, held: held)
-    lastClick = Clicked(longestPress: took, again: { click(app, held: held) })
+    lastClick = Clicked(longestPress: took, again: { click(app, held: held) }, lost: late)
 }
 
 /// Two clicks in a row, the second `gap` seconds after the first. The
@@ -198,6 +233,7 @@ func doubleClick(_ app: NSRunningApplication, gap: TimeInterval) {
     }
     post(.mouseMoved, at: spot)
     pause(0.3)
+    let late = lateForSuperSurfer()
     var longest: TimeInterval = 0
     for count: Int64 in [1, 2] {
         longest = max(longest, press(at: spot, held: 0.05, count: count))
@@ -206,7 +242,7 @@ func doubleClick(_ app: NSRunningApplication, gap: TimeInterval) {
             spot = icon(of: app)?.centre ?? spot
         }
     }
-    lastClick = Clicked(longestPress: longest, again: { doubleClick(app, gap: gap) })
+    lastClick = Clicked(longestPress: longest, again: { doubleClick(app, gap: gap) }, lost: late)
 }
 
 /// A click at a point, on whatever is there.
@@ -435,9 +471,9 @@ func expect(
     // Repeated is only a press that was no click. A click that did not do
     // what it should is what this test is there to find.
     var repeats = 0
-    while !arrived, repeats < 2, let last = lastClick, last.wasNoClick || (last.unheard?() ?? false) {
+    while !arrived, repeats < 2, let last = lastClick, let excuse = last.excuse {
         repeats += 1
-        say("      " + (last.wasNoClick ? notAClick(last) : "nothing came of this click at all") + ": once more")
+        say("      " + excuse + ": once more")
         lastClick = nil
         // Such a press may have opened the icon's menu.
         pressEscape()
@@ -1190,7 +1226,7 @@ func testShortcuts(
             lastClick = Clicked(
                 longestPress: lastClick?.longestPress ?? 0,
                 again: { use(profile) },
-                unheard: { asked() == before }
+                lost: { asked() == before ? "nothing came of this click at all" : nil }
             )
         } else {
             lastClick = nil
