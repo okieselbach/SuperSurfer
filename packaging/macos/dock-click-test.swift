@@ -339,6 +339,10 @@ func stays(_ what: String, of app: NSRunningApplication, for duration: TimeInter
 
 // MARK: - Apps to click on
 
+/// Where the two text files for TextEdit go while a test needs them.
+let documents = FileManager.default.temporaryDirectory
+    .appendingPathComponent("supersurfer-dock-click-\(ProcessInfo.processInfo.processIdentifier)")
+
 func run(_ tool: String, _ arguments: [String]) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: tool)
@@ -447,6 +451,36 @@ func testControl() {
         }
     }
     calculator.terminate()
+
+    // Why Dock Click keeps track of the windows it minimizes: for the record,
+    // how many of two minimized windows a click on the icon brings back when
+    // nobody helps.
+    let textEdit = twoTextEditWindows()
+    for window in elements(AXUIElementCreateApplication(textEdit.processIdentifier), kAXWindowsAttribute) {
+        AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+    }
+    expect("two windows minimized by hand", of: textEdit, within: 10) {
+        windowsOnScreen(textEdit) == 0 && minimizedWindows(textEdit) == 2
+    }
+    pause(1)
+    click(textEdit)
+    pause(3)
+    say("      macOS alone brings back \(windowsOnScreen(textEdit)) of 2 windows")
+    textEdit.terminate()
+    try? FileManager.default.removeItem(at: documents)
+}
+
+/// TextEdit in front with two documents, which are two windows.
+func twoTextEditWindows() -> NSRunningApplication {
+    let folder = documents
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    var files: [String] = []
+    for title in ["one", "two"] {
+        let file = folder.appendingPathComponent("\(title).txt")
+        try? title.write(to: file, atomically: true, encoding: .utf8)
+        files.append(file.path)
+    }
+    return bringToFront("TextEdit", "com.apple.TextEdit", files: files, windows: 2)
 }
 
 func testHide() {
@@ -536,18 +570,7 @@ func testMenu() {
 }
 
 func testMinimize() {
-    let folder = FileManager.default.temporaryDirectory
-        .appendingPathComponent("supersurfer-dock-click-\(ProcessInfo.processInfo.processIdentifier)")
-    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
-    var files: [String] = []
-    for title in ["one", "two"] {
-        let file = folder.appendingPathComponent("\(title).txt")
-        try? title.write(to: file, atomically: true, encoding: .utf8)
-        files.append(file.path)
-    }
-
-    let textEdit = bringToFront("TextEdit", "com.apple.TextEdit", files: files, windows: 2)
+    let textEdit = twoTextEditWindows()
     say("      \(state(of: textEdit))")
 
     say("-- every window of the app in front goes into the Dock, the next click brings all back")
@@ -620,6 +643,7 @@ func testMinimize() {
 
     closeWindows(of: finder)
     textEdit.terminate()
+    try? FileManager.default.removeItem(at: documents)
 }
 
 switch CommandLine.arguments.dropFirst().first {
