@@ -189,8 +189,10 @@ Like Dock Click this has nothing to do with routing links, and none of it runs u
 **Signed-in profiles.** The *Profiles* menu does not always list a profile under its name. For a profile that is signed in to an account, Chrome shows the account's name, or both, as "Ada (Work)", and a name an organization gave the profile in place of the profile's own. SuperSurfer works out which of these to expect the way Chromium's source does, looks for the other forms after that, and then for an entry that has the profile's name in it as a word of its own. If no entry fits, or more than one, it opens a new window of the profile instead and writes the entries it saw to the system log:
 
 ```bash
-log show --last 5m --predicate 'process == "SuperSurfer"'
+log show --last 5m --predicate 'eventMessage CONTAINS "SuperSurfer"'
 ```
+
+The same command shows it when a shortcut could not reach SuperSurfer at all, for instance because the app was moved away. The shortcut then opens a window of the profile by itself.
 
 **Which browsers.** Edge and Chrome. Their Beta and Canary builds and Chromium have the same menu and are offered as well, untried. Firefox is not offered: it runs every profile as an app of its own, which has its own Dock icon while it runs. Safari is not offered either: its profiles cannot be reached from outside.
 

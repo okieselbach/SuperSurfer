@@ -195,7 +195,7 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 
 **Dock Click does nothing (macOS)** — the menu entry shows ⚠︎ while the Accessibility permission is missing. If System Settings shows SuperSurfer as switched on, the permission belongs to an older build: remove SuperSurfer from the list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
 
-**A Dock shortcut opens a new window every time (macOS)** — the Accessibility permission is missing or belongs to an older build; the entry above says how to give it again. If the permission is there, the browser lists the profile in its *Profiles* menu under a name SuperSurfer does not expect. `log show --last 5m --predicate 'process == "SuperSurfer"'` shows which names it saw.
+**A Dock shortcut opens a new window every time (macOS)** — the Accessibility permission is missing or belongs to an older build; the entry above says how to give it again. If the permission is there, either the browser lists the profile in its *Profiles* menu under a name SuperSurfer does not expect, or the shortcut could not reach SuperSurfer. `log show --last 5m --predicate 'eventMessage CONTAINS "SuperSurfer"'` says which, and which names it saw.
 
 **No menu bar icon (macOS)** — start the app with `open -a SuperSurfer`. If the icon was dragged out of the menu bar, this also brings it back.
 
