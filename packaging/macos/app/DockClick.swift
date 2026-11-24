@@ -205,32 +205,6 @@ private struct DockIcon {
     }
 }
 
-private enum AX {
-    static func value(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
-            return nil
-        }
-        return value
-    }
-
-    static func string(_ element: AXUIElement, _ attribute: String) -> String? {
-        return value(element, attribute) as? String
-    }
-
-    static func bool(_ element: AXUIElement, _ attribute: String) -> Bool? {
-        return value(element, attribute) as? Bool
-    }
-
-    static func url(_ element: AXUIElement, _ attribute: String) -> URL? {
-        let found = value(element, attribute)
-        if let url = found as? URL {
-            return url
-        }
-        return (found as? String).flatMap { URL(string: $0) }
-    }
-}
-
 final class DockClickController {
     static let shared = DockClickController()
 

@@ -46,6 +46,24 @@ enum Launcher {
         }
     }
 
+    /// Asks a browser for a window of one profile without giving it a link:
+    /// `open -n -a App --args <flags>`. A browser that is not running starts
+    /// with that profile. One that is running gets the flags from a second
+    /// instance, opens a new window of the profile and the instance ends.
+    /// The completion handler runs on an arbitrary queue.
+    static func openProfileWindow(appPath: String, arguments: [String], completion: @escaping (Error?) -> Void) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.arguments = arguments
+        // Without flags there is nothing a second instance could pass on.
+        configuration.createsNewApplicationInstance = !arguments.isEmpty
+        NSWorkspace.shared.openApplication(
+            at: URL(fileURLWithPath: appPath, isDirectory: true),
+            configuration: configuration
+        ) { _, error in
+            completion(error)
+        }
+    }
+
     /// Last resort when the routing engine gave no usable answer at all: a
     /// web link still opens somewhere instead of vanishing.
     static func openInSafari(_ text: String) {

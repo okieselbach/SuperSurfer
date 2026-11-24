@@ -65,6 +65,14 @@
 				<string>https</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>SuperSurfer Dock shortcut</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>supersurfer</string>
+			</array>
+		</dict>
 	</array>
 	<key>LSMinimumSystemVersion</key>
 	<string>11.0</string>

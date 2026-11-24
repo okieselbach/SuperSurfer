@@ -135,6 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// starting anything.
     func application(_ application: NSApplication, open urls: [URL]) {
         let started = DispatchTime.now()
+        // A Dock shortcut for a browser profile asks with a link of its own
+        // kind, which is not routed.
+        for url in urls where ProfileShortcutRules.isLink(url) {
+            ProfileShortcuts.shared.open(url, engine: engine)
+        }
         // Read the keyboard now; by the time routing answers the key may be up.
         let flags = NSEvent.modifierFlags
         let opener = OpenerInfo.frontmostApplication()
