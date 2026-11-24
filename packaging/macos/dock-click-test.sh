@@ -84,7 +84,7 @@ if app_is_running dev.supersurfer.app; then
   exit 1
 fi
 
-echo "== driver"
+echo "== driver, on macOS $(sw_vers -productVersion)"
 swiftc "$HERE/dock-click-test.swift" -o "$DRIVER"
 STATUS=0
 "$DRIVER" preflight || STATUS=$?
