@@ -101,6 +101,10 @@ fi
 echo "== without SuperSurfer"
 "$DRIVER" control
 
+# TEMPORARY
+echo "== probe: Mission Control, App Exposé, Show Desktop"
+"$DRIVER" probe-modes || true
+
 # Finishes first-run setup for the scratch HOME, so the app does not open the
 # manual in a browser when it starts.
 mkdir -p "$SUPPORT"

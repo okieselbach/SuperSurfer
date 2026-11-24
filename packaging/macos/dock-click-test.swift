@@ -646,7 +646,56 @@ func testMinimize() {
     try? FileManager.default.removeItem(at: documents)
 }
 
+// TEMPORARY: what does the Dock look like to Accessibility in Mission
+// Control, App Exposé and Show Desktop, and what does a click on the icon of
+// the app in front do there when nobody helps?
+func dumpDock(_ label: String) {
+    guard let dock = dockElement() else {
+        return
+    }
+    for child in elements(dock, kAXChildrenAttribute) {
+        let kids = elements(child, kAXChildrenAttribute)
+        say("PROBE \(label): role \(text(child, kAXRoleAttribute) ?? "-")"
+            + " subrole \(text(child, kAXSubroleAttribute) ?? "-")"
+            + " id \(text(child, "AXIdentifier") ?? "-")"
+            + " desc \(text(child, kAXDescriptionAttribute) ?? "-")"
+            + " title \(text(child, kAXTitleAttribute) ?? "-")"
+            + " children \(kids.count)")
+        if text(child, kAXRoleAttribute) != "AXList" {
+            for kid in kids.prefix(6) {
+                say("PROBE \(label):   - role \(text(kid, kAXRoleAttribute) ?? "-")"
+                    + " id \(text(kid, "AXIdentifier") ?? "-")"
+                    + " desc \(text(kid, kAXDescriptionAttribute) ?? "-")")
+            }
+        }
+    }
+}
+
+func probeModes() {
+    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    dumpDock("normal")
+    let missionControl = "/System/Applications/Mission Control.app/Contents/MacOS/Mission Control"
+    for (label, arguments) in [("mission control", []), ("app expose", ["2"]), ("show desktop", ["1"])] {
+        run(missionControl, arguments)
+        pause(2)
+        dumpDock(label)
+        say("PROBE \(label): \(state(of: calculator))")
+        click(calculator)
+        pause(2)
+        dumpDock("\(label), after a click on the icon")
+        say("PROBE \(label), after a click on the icon: \(state(of: calculator))")
+        for keyDown in [true, false] {
+            CGEvent(keyboardEventSource: mouse, virtualKey: 53, keyDown: keyDown)?.post(tap: .cghidEventTap)
+        }
+        pause(1.5)
+        _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    }
+    calculator.terminate()
+}
+
 switch CommandLine.arguments.dropFirst().first {
+case "probe-modes":
+    probeModes()
 case "preflight":
     preflight()
 case "control":
