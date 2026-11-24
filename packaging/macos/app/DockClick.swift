@@ -433,7 +433,11 @@ final class DockClickController {
             let spot = NSPoint(x: point.x, y: primary.frame.height - point.y)
             number = NSWindow.windowNumber(at: spot, belowWindowWithWindowNumber: 0)
         }
-        guard number > 0, !otherWindows.contains(number) else {
+        guard number > 0 else {
+            DockClickController.trace("a click on no window the window server could name was left alone")
+            return nil
+        }
+        guard !otherWindows.contains(number) else {
             return nil
         }
         if dockApp?.isTerminated != false {
@@ -450,6 +454,7 @@ final class DockClickController {
         // are not handed out twice, so the answer can be kept.
         guard let found = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(number)) as? [[String: Any]],
               let owner = (found.first?[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value else {
+            DockClickController.trace("a click on window \(number), which nothing is known about, was left alone")
             return nil
         }
         if owner == dock {
@@ -460,6 +465,10 @@ final class DockClickController {
             otherWindows.removeAll()
         }
         otherWindows.insert(number)
+        // Said once per window, for when a click on a Dock icon seems to be
+        // overlooked: something else may lie over the icon.
+        let name = (found.first?[kCGWindowOwnerName as String] as? String) ?? "pid \(owner)"
+        DockClickController.trace("clicks on window \(number) of \(name) are not for the Dock and are not looked at")
         return nil
     }
 
