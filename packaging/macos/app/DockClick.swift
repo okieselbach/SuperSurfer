@@ -120,6 +120,8 @@ private final class Press {
     let front: NSRunningApplication?
     /// Set and read on the worker queue only.
     var plan = Plan.nothing
+    /// Main thread only: a second click followed before anything was done.
+    var cancelled = false
     /// What the click cost on the main thread and, before anything was done
     /// about it, on the worker queue. Only read for the `--resident` trace.
     var mainTime: TimeInterval = 0
@@ -217,7 +219,10 @@ final class DockClickController {
     private var activationObserver: NSObjectProtocol?
     private var frontPID: pid_t = 0
     private var frontSince: TimeInterval = 0
+    /// The press whose button is down right now.
     private var press: Press?
+    /// The last complete click, which may still be waiting out `settleTime`.
+    private var lastClick: Press?
 
     // Worker queue only.
     private let worker = DispatchQueue(label: "dev.supersurfer.dock-click", qos: .userInitiated)
@@ -243,6 +248,7 @@ final class DockClickController {
             activationObserver = nil
             monitorHasPermission = false
             press = nil
+            lastClick = nil
             return
         }
 
@@ -391,9 +397,16 @@ final class DockClickController {
                     now - event.timestamp
                 ))
             }
-            // The second click of a double click is left to the Dock, so a
-            // double click ends where it began.
-            guard mode != .off, fresh, event.clickCount == 1,
+            // A double click has to end where it began. Its second click
+            // stops the first one if that is still waiting, and never puts
+            // anything away itself: it counts as a click on an app that was
+            // not in front. Under "minimize" that still brings back what the
+            // first click sent into the Dock.
+            let repeated = event.clickCount > 1
+            if repeated {
+                lastClick?.cancelled = true
+            }
+            guard mode != .off, fresh,
                   DockClickRules.isPlain(event.modifierFlags),
                   let point = event.cgEvent?.location else {
                 return
@@ -402,7 +415,7 @@ final class DockClickController {
                 time: event.timestamp,
                 point: point,
                 mode: mode,
-                front: appInFront(before: event.timestamp)
+                front: repeated ? nil : appInFront(before: event.timestamp)
             )
             press = started
             worker.async {
@@ -421,6 +434,7 @@ final class DockClickController {
             }
             let wait = max(0, DockClickController.settleTime - (now - event.timestamp))
             ended.mainTime += ProcessInfo.processInfo.systemUptime - now
+            lastClick = ended
             worker.asyncAfter(deadline: .now() + wait) {
                 self.perform(ended)
             }
@@ -496,7 +510,7 @@ final class DockClickController {
 
         case .hide(let app):
             DispatchQueue.main.async {
-                guard DockClickController.isInFront(app), !app.isHidden else {
+                guard !press.cancelled, DockClickController.isInFront(app), !app.isHidden else {
                     return
                 }
                 // What hide() returns is not worth reading: it says false
@@ -507,7 +521,7 @@ final class DockClickController {
 
         case .minimize(let app, let windows):
             DispatchQueue.main.async {
-                guard DockClickController.isInFront(app) else {
+                guard !press.cancelled, DockClickController.isInFront(app) else {
                     return
                 }
                 self.worker.async {

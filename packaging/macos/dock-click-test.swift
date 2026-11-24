@@ -118,7 +118,8 @@ func icon(of app: NSRunningApplication) -> Icon? {
 
 let mouse = CGEventSource(stateID: .hidSystemState)
 
-func post(_ type: CGEventType, at point: CGPoint) {
+/// `count` is 1 for a click and 2 for the second click of a double click.
+func post(_ type: CGEventType, at point: CGPoint, count: Int64 = 1) {
     guard let event = CGEvent(
         mouseEventSource: mouse,
         mouseType: type,
@@ -128,7 +129,7 @@ func post(_ type: CGEventType, at point: CGPoint) {
         stop("could not make a mouse event")
     }
     if type != .mouseMoved {
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.setIntegerValueField(.mouseEventClickState, value: count)
     }
     event.post(tap: .cghidEventTap)
 }
@@ -145,6 +146,23 @@ func click(_ app: NSRunningApplication, held: TimeInterval = 0.08) {
     post(.leftMouseDown, at: spot)
     usleep(useconds_t(held * 1_000_000))
     post(.leftMouseUp, at: spot)
+}
+
+/// Two clicks in a row, the second `gap` seconds after the first.
+func doubleClick(_ app: NSRunningApplication, gap: TimeInterval) {
+    guard let spot = icon(of: app)?.centre else {
+        stop("no Dock icon found for \(name(app))")
+    }
+    post(.mouseMoved, at: spot)
+    pause(0.3)
+    for count: Int64 in [1, 2] {
+        post(.leftMouseDown, at: spot, count: count)
+        usleep(50_000)
+        post(.leftMouseUp, at: spot, count: count)
+        if count == 1 {
+            usleep(useconds_t(gap * 1_000_000))
+        }
+    }
 }
 
 // MARK: - What can be seen of an app
@@ -348,6 +366,16 @@ func testHide() {
         }
     }
 
+    for gap in [0.05, 0.25] {
+        say("-- a double click, second click after \(gap) s, ends where it began")
+        _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+        doubleClick(calculator, gap: gap)
+        pause(1.5)
+        stays("Calculator is there", of: calculator, for: 2) {
+            windowsOnScreen(calculator) > 0 && isInFront(calculator)
+        }
+    }
+
     say("-- Safari: its Dock icon and the running app need not name the same path")
     let safari = bringToFront("Safari", "com.apple.Safari", windows: 1)
     say("      icon: \(icon(of: safari)?.url?.path ?? "?")")
@@ -410,6 +438,18 @@ func testMinimize() {
         windowsOnScreen(textEdit) >= 2 && minimizedWindows(textEdit) == 0
     }
     say("      \(state(of: textEdit))")
+
+    for gap in [0.05, 0.25] {
+        say("-- a double click, second click after \(gap) s, ends where it began")
+        doubleClick(textEdit, gap: gap)
+        pause(1)
+        expect("both windows are there", of: textEdit, within: 10) {
+            windowsOnScreen(textEdit) >= 2 && minimizedWindows(textEdit) == 0
+        }
+        stays("and stay", of: textEdit, for: 2) {
+            windowsOnScreen(textEdit) >= 2 && minimizedWindows(textEdit) == 0
+        }
+    }
 
     say("-- they also come back when another app was in front in between")
     click(textEdit)
