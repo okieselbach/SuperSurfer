@@ -244,7 +244,8 @@ func cover(_ app: NSRunningApplication) -> (panel: NSPanel, spot: CGPoint) {
     return (panel, spot)
 }
 
-/// Mission Control ("") or App Exposé ("2"), the way the keyboard opens them.
+/// Mission Control (""), Show Desktop ("1") or App Exposé ("2"), the way the
+/// keyboard opens them.
 func openMissionControl(_ argument: String) {
     let tool = "/System/Applications/Mission Control.app/Contents/MacOS/Mission Control"
     run(tool, argument.isEmpty ? [] : [argument])
@@ -632,7 +633,7 @@ func testHide() {
         windowsOnScreen(calculator) > 0 && isInFront(calculator)
     }
 
-    for (label, argument) in [("Mission Control", ""), ("App Exposé", "2")] {
+    for (label, argument) in [("Mission Control", ""), ("App Exposé", "2"), ("Show Desktop", "1")] {
         say("-- in \(label) a click on the icon is a way back to the app")
         _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
         openMissionControl(argument)

@@ -851,12 +851,16 @@ final class DockClickController {
 
     /// The ordinary windows the app shows on this Space right now. The
     /// window server is asked, not the app, so a hung app cannot hold this
-    /// up.
+    /// up. A window counts only if a piece of it worth mentioning lies on a
+    /// display: Show Desktop pushes windows off the edge and leaves a strip
+    /// of a few points, and a click on the icon is then the way to get them
+    /// back.
     private static func windowsOnScreen(of pid: pid_t) -> Set<CGWindowID> {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return []
         }
+        let displays = displayBounds()
         var found: Set<CGWindowID> = []
         for window in list {
             guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
@@ -864,13 +868,31 @@ final class DockClickController {
                   ((window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1) > 0.01,
                   let number = (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
                   let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-                  frame.width >= 40, frame.height >= 40 else {
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else {
                 continue
             }
-            found.insert(number)
+            let inSight = displays.isEmpty || displays.contains { display in
+                let part = frame.intersection(display)
+                return part.width >= 40 && part.height >= 40
+            }
+            if inSight {
+                found.insert(number)
+            }
         }
         return found
+    }
+
+    /// Where the displays are, in the coordinates window bounds come in.
+    private static func displayBounds() -> [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else {
+            return []
+        }
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displays, &count) == .success else {
+            return []
+        }
+        return displays.prefix(Int(count)).map { CGDisplayBounds($0) }
     }
 
     /// With `--resident`, one line on stderr per Dock click that was looked
