@@ -68,6 +68,10 @@ enum DockClickRules {
     /// An event that is handled this long after it happened says nothing
     /// reliable about the moment it happened, and is left alone.
     static let staleAfter: TimeInterval = 0.25
+    /// Nothing is put away later than this after the button went down. With
+    /// a Dock or an app that is slow to answer, an app vanishing seconds
+    /// after the click would be worse than a click that did nothing.
+    static let tooLate: TimeInterval = 1
 
     /// Both times are seconds since startup: `NSEvent.timestamp` and
     /// `ProcessInfo.systemUptime`.
@@ -510,7 +514,8 @@ final class DockClickController {
 
         case .hide(let app):
             DispatchQueue.main.async {
-                guard !press.cancelled, DockClickController.isInFront(app), !app.isHidden else {
+                guard !press.cancelled, DockClickController.isInTime(press),
+                      DockClickController.isInFront(app), !app.isHidden else {
                     return
                 }
                 // What hide() returns is not worth reading: it says false
@@ -521,7 +526,8 @@ final class DockClickController {
 
         case .minimize(let app, let windows):
             DispatchQueue.main.async {
-                guard !press.cancelled, DockClickController.isInFront(app) else {
+                guard !press.cancelled, DockClickController.isInTime(press),
+                      DockClickController.isInFront(app) else {
                     return
                 }
                 self.worker.async {
@@ -660,6 +666,10 @@ final class DockClickController {
 
     private static func isInFront(_ app: NSRunningApplication) -> Bool {
         return NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
+    }
+
+    private static func isInTime(_ press: Press) -> Bool {
+        return ProcessInfo.processInfo.systemUptime - press.time < DockClickRules.tooLate
     }
 
     /// With `--resident`, one line on stderr per Dock click that was looked
