@@ -13,6 +13,23 @@ struct RecentLink {
     let pickedByHand: Bool
 }
 
+/// When a link passed which point on its way through the app. Only read for
+/// the `--resident` trace and the time shown under Recent Links.
+struct RouteTimes {
+    /// The URL event arrived.
+    let received: DispatchTime
+    /// Keyboard and frontmost app are read; the request is queued.
+    let queued: DispatchTime
+    /// The engine was asked.
+    let asked: DispatchTime
+    /// The engine answered.
+    let answered: DispatchTime
+
+    static func milliseconds(from start: DispatchTime, to end: DispatchTime) -> Double {
+        return Double(end.uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+    }
+}
+
 /// True when this very app bundle already has a running instance. Launch
 /// Services never starts a second one on its own, but `--resident` from a
 /// shell or `open -n` would, and two menu bar icons help nobody.
@@ -145,15 +162,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         started: DispatchTime?
     ) {
         let engine = self.engine
+        let queued = DispatchTime.now()
         routeQueue.async {
+            let asked = DispatchTime.now()
             let reply = engine.route(url: input, opener: opener, modifiers: modifiers, preview: askUser)
+            let answered = DispatchTime.now()
+            let times = started.map { received in
+                RouteTimes(received: received, queued: queued, asked: asked, answered: answered)
+            }
             DispatchQueue.main.async {
-                self.finishRoute(input: input, reply: reply, askUser: askUser, started: started)
+                self.finishRoute(input: input, reply: reply, askUser: askUser, times: times)
             }
         }
     }
 
-    private func finishRoute(input: String, reply: RouteReply?, askUser: Bool, started: DispatchTime?) {
+    private func finishRoute(input: String, reply: RouteReply?, askUser: Bool, times: RouteTimes?) {
         guard let reply = reply else {
             // No usable answer from the engine. Do not swallow the click.
             Launcher.openInSafari(input)
@@ -175,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let browser = Format.browserLabel(decision.browser, profile: decision.profile)
-        launch(plan, decision: decision, browser: browser, pickedByHand: false, started: started)
+        launch(plan, decision: decision, browser: browser, pickedByHand: false, times: times)
     }
 
     private func launch(
@@ -183,21 +206,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         decision: Decision,
         browser: String,
         pickedByHand: Bool,
-        started: DispatchTime?
+        times: RouteTimes?
     ) {
-        let elapsedMs = started.map { start in
-            Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-        }
+        let handedOver = DispatchTime.now()
+        let elapsedMs = times.map { RouteTimes.milliseconds(from: $0.received, to: handedOver) }
         let engine = self.engine
         let queue = routeQueue
         let trace = AppDelegate.traceToStderr
-        if trace, let elapsedMs = elapsedMs {
-            fputs("SuperSurfer: routed \(decision.inputUrl) to \(browser) in \(Format.milliseconds(elapsedMs))\n", stderr)
+        if trace, let times = times, let elapsedMs = elapsedMs {
+            let eventMs = RouteTimes.milliseconds(from: times.received, to: times.queued)
+            let queueMs = RouteTimes.milliseconds(from: times.queued, to: times.asked)
+            let engineMs = RouteTimes.milliseconds(from: times.asked, to: times.answered)
+            let backMs = RouteTimes.milliseconds(from: times.answered, to: handedOver)
+            let parts = String(
+                format: "event %.2f, queue %.2f, engine %.2f, back to main %.2f",
+                eventMs, queueMs, engineMs, backMs
+            )
+            fputs("SuperSurfer: routed \(decision.inputUrl) to \(browser) in \(Format.milliseconds(elapsedMs)) (\(parts))\n", stderr)
         }
-        let handedOver = DispatchTime.now()
         Launcher.open(plan) { error in
             if trace {
-                let waited = Double(DispatchTime.now().uptimeNanoseconds - handedOver.uptimeNanoseconds) / 1_000_000
+                let waited = RouteTimes.milliseconds(from: handedOver, to: DispatchTime.now())
                 fputs("SuperSurfer: \(browser) accepted it after \(Format.milliseconds(waited))\n", stderr)
             }
             guard let error = error else {
@@ -298,7 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 if let reply = reply, reply.ok, let plan = reply.launch {
                     let label = Format.browserLabel(browser.name, profile: profile)
-                    self.launch(plan, decision: decision, browser: label, pickedByHand: true, started: nil)
+                    self.launch(plan, decision: decision, browser: label, pickedByHand: true, times: nil)
                 } else {
                     self.showAlert(
                         title: tr("The link could not be opened", "Der Link konnte nicht geöffnet werden"),

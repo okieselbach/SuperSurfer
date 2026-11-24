@@ -124,7 +124,17 @@ if ! wait_for 30 grep -qF "$LINK?second=1" "$LOG"; then
 fi
 kill -0 "$PID"
 
-# Give the browser a moment to answer the second link, then show the timings.
+# The first links pay for Safari starting up. Let that settle, then send a
+# few more to see what a click costs once everything is running.
+sleep 8
+for n in 3 4 5 6 7; do
+  open -a "$APP" "$LINK?n=$n"
+  sleep 1
+done
+if ! wait_for 30 grep -qF "$LINK?n=7" "$LOG"; then
+  echo "FAIL: later links were not routed" >&2
+  exit 1
+fi
 sleep 2
 sed 's/^/timing:  /' "$TRACE"
 
