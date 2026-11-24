@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use std::fs;
 use std::path::PathBuf;
 
-pub const LANDING_URL: &str = "https://github.com/Jabe/SuperSurfer/blob/main/docs/manual.md";
+pub const LANDING_URL: &str = "https://github.com/okieselbach/SuperSurfer/blob/main/docs/manual.md";
 
 const MARKER_FILE: &str = "bootstrapped";
 
