@@ -16,7 +16,7 @@ import Cocoa
 // profiles:
 //
 //   dock-click-test shortcuts <edge|chrome> <scratch HOME> <SuperSurfer.app>
-//                             [dock] [start]
+//                             <SuperSurfer's trace> [dock] [start]
 
 func say(_ text: String) {
     print(text)
@@ -165,6 +165,9 @@ func post(_ type: CGEventType, at point: CGPoint, count: Int64 = 1) {
 struct Clicked {
     let longestPress: TimeInterval
     let again: () -> Void
+    /// For a click that is known to be heard of somewhere when it works:
+    /// whether nothing was heard of it.
+    var unheard: (() -> Bool)?
 
     var wasNoClick: Bool {
         return longestPress > 0.3
@@ -432,9 +435,9 @@ func expect(
     // Repeated is only a press that was no click. A click that did not do
     // what it should is what this test is there to find.
     var repeats = 0
-    while !arrived, repeats < 2, let last = lastClick, last.wasNoClick {
+    while !arrived, repeats < 2, let last = lastClick, last.wasNoClick || (last.unheard?() ?? false) {
         repeats += 1
-        say("      " + notAClick(last) + ": once more")
+        say("      " + (last.wasNoClick ? notAClick(last) : "nothing came of this click at all") + ": once more")
         lastClick = nil
         // Such a press may have opened the icon's menu.
         pressEscape()
@@ -1015,7 +1018,14 @@ func chooseInDockShortcuts(_ steps: [([AXUIElement]) -> AXUIElement?], what: Str
     stop("SuperSurfer's menu has no \(what) under Dock Shortcuts")
 }
 
-func testShortcuts(_ browser: TestBrowser, home: String, superSurfer: String, onDock: Bool, startToo: Bool) {
+func testShortcuts(
+    _ browser: TestBrowser,
+    home: String,
+    superSurfer: String,
+    trace: String,
+    onDock: Bool,
+    startToo: Bool
+) {
     let binary = browser.appPath + "/Contents/MacOS/" + browser.binary
     guard FileManager.default.fileExists(atPath: binary) else {
         say("skipped: \(browser.name) is not installed")
@@ -1135,13 +1145,27 @@ func testShortcuts(_ browser: TestBrowser, home: String, superSurfer: String, on
         pause(2)
     }
 
+    /// How often SuperSurfer says in its trace that a shortcut asked.
+    func asked() -> Int {
+        let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n").filter { $0.contains("dock shortcut: asked for") }.count
+    }
     /// A click on the shortcut. Where it is in the Dock that is a click on
     /// its icon; otherwise Launch Services is asked to start the app, which
     /// is what the Dock does with the click.
     func use(_ profile: String) {
         let name = "\(browser.shortName) \(profile).app"
         if profile == inDock, let spot = appIcons().first(where: { $0.url?.lastPathComponent == name })?.centre {
+            // Once in some dozen clicks the Dock of a test machine starts
+            // nothing. Whether it did shows in SuperSurfer's trace, and only
+            // a click that never got that far is repeated.
+            let before = asked()
             click(at: spot)
+            lastClick = Clicked(
+                longestPress: lastClick?.longestPress ?? 0,
+                again: { use(profile) },
+                unheard: { asked() == before }
+            )
         } else {
             lastClick = nil
             run("/usr/bin/open", [bundle(profile)])
@@ -1223,51 +1247,6 @@ func testShortcuts(_ browser: TestBrowser, home: String, superSurfer: String, on
     }
     say("      its title: \(mainWindowTitle(app))")
 
-    // TEMPORARY: how soon after a click does the Dock start the same
-    // shortcut again?
-    if onDock, let tracePath = ProcessInfo.processInfo.environment["SUPERSURFER_TRACE"] {
-        func asked() -> Int {
-            let text = (try? String(contentsOfFile: tracePath, encoding: .utf8)) ?? ""
-            return text.components(separatedBy: "\n").filter { $0.contains("asked for") }.count
-        }
-        let helper = "dev.supersurfer.shortcut.\(browser.id).Profile-1"
-        func helperSeen(within seconds: TimeInterval) -> Bool {
-            let end = Date().addingTimeInterval(seconds)
-            var seen = false
-            while Date() < end {
-                if !NSRunningApplication.runningApplications(withBundleIdentifier: helper).isEmpty {
-                    seen = true
-                }
-                pause(0.01)
-            }
-            return seen
-        }
-        let name = "\(browser.shortName) \(second).app"
-        for gap in [0.6, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0] {
-            pause(6)
-            guard let spot = appIcons().first(where: { $0.url?.lastPathComponent == name })?.centre else {
-                say("PROBE repeat: \(name) is not in the Dock")
-                continue
-            }
-            let before = asked()
-            click(at: spot)
-            let first = helperSeen(within: gap)
-            click(at: spot)
-            let second = helperSeen(within: 3)
-            say("PROBE repeat, \(gap) s apart: \(asked() - before) of 2 clicks reached SuperSurfer;"
-                + " the shortcut was seen running after the first: \(first), after the second: \(second)")
-        }
-        lastClick = nil
-        let strays = outputOf("/bin/ps", ["-axww", "-o", "pid=,args="])
-            .components(separatedBy: "\n")
-            .filter { line in
-                line.contains(browser.binary) && line.contains("--profile-directory=")
-                    && !line.contains("--user-data-dir") && !line.contains("--type=")
-            }
-        say("PROBE repeat: browsers started without the test's own profiles: \(strays)")
-        pause(2)
-    }
-
     say("-- a shortcut is removed in SuperSurfer's menu")
     chooseInDockShortcuts(
         [profileEntry(browser.name, third), entryTitled(["Remove Shortcut", "Verknüpfung entfernen"])],
@@ -1309,16 +1288,17 @@ func testShortcuts(_ browser: TestBrowser, home: String, superSurfer: String, on
 switch CommandLine.arguments.dropFirst().first {
 case "shortcuts":
     let arguments = Array(CommandLine.arguments.dropFirst(2))
-    guard arguments.count >= 3, let browser = testBrowsers.first(where: { $0.id == arguments[0] }) else {
-        say("usage: dock-click-test shortcuts <edge|chrome> <scratch HOME> <SuperSurfer.app> [dock] [start]")
+    guard arguments.count >= 4, let browser = testBrowsers.first(where: { $0.id == arguments[0] }) else {
+        say("usage: dock-click-test shortcuts <edge|chrome> <scratch HOME> <SuperSurfer.app> <trace> [dock] [start]")
         exit(2)
     }
     testShortcuts(
         browser,
         home: arguments[1],
         superSurfer: arguments[2],
-        onDock: arguments.contains("dock"),
-        startToo: arguments.contains("start")
+        trace: arguments[3],
+        onDock: arguments.dropFirst(4).contains("dock"),
+        startToo: arguments.dropFirst(4).contains("start")
     )
 case "preflight":
     preflight()

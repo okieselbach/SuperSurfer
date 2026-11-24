@@ -111,8 +111,7 @@ sleep 1
 STATUS=0
 for BROWSER in edge chrome; do
   echo "== dock shortcuts: $BROWSER"
-  # TEMPORARY: the trace, for a look at clicks in quick succession.
-  SUPERSURFER_TRACE="$TRACE" "$DRIVER" shortcuts "$BROWSER" "$SCRATCH" "$APP" ${EXTRAS[@]+"${EXTRAS[@]}"} || STATUS=$?
+  "$DRIVER" shortcuts "$BROWSER" "$SCRATCH" "$APP" "$TRACE" ${EXTRAS[@]+"${EXTRAS[@]}"} || STATUS=$?
   if [ "$STATUS" -ne 0 ]; then
     break
   fi
@@ -124,6 +123,17 @@ PID=""
 sed 's/^/trace: /' "$TRACE"
 if [ "$STATUS" -ne 0 ]; then
   exit "$STATUS"
+fi
+
+# A shortcut that cannot reach SuperSurfer says so in the system log and
+# opens a window by itself. SuperSurfer was running all the time, so none
+# should have had to. Reading the log needs an administrator; where that
+# fails, nothing is concluded.
+NOTE="could not reach SuperSurfer"
+ALONE="$(log show --last 15m --predicate "eventMessage CONTAINS \"$NOTE\"" 2>/dev/null | grep -c "$NOTE" || true)"
+if [ "${ALONE:-0}" -gt 0 ]; then
+  echo "FAIL: $ALONE time(s) a shortcut could not reach SuperSurfer and opened a window by itself" >&2
+  exit 1
 fi
 
 echo "dock shortcut test passed"
