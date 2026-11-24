@@ -102,8 +102,10 @@ echo "== without SuperSurfer"
 "$DRIVER" control
 
 # TEMPORARY
-echo "== probe: Mission Control, App Exposé, Show Desktop"
-"$DRIVER" probe-modes || true
+echo "== probe: Show Desktop"
+"$DRIVER" probe-desktop || true
+echo "== probe: Edge profiles"
+"$DRIVER" probe-edge || true
 
 # Finishes first-run setup for the scratch HOME, so the app does not open the
 # manual in a browser when it starts.

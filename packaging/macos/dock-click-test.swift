@@ -823,6 +823,145 @@ func dumpDock(_ label: String) {
     }
 }
 
+func boundsOnScreen(_ app: NSRunningApplication) -> String {
+    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+        return "?"
+    }
+    return list.compactMap { window -> String? in
+        guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == app.processIdentifier,
+              (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+              let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+              let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else {
+            return nil
+        }
+        return "\(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))"
+    }.joined(separator: " | ")
+}
+
+func probeShowDesktop() {
+    let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
+    say("PROBE desktop: screens \(NSScreen.screens.map { $0.frame })")
+    say("PROBE desktop, normal: \(boundsOnScreen(calculator))")
+    openMissionControl("1")
+    say("PROBE desktop, shown: \(boundsOnScreen(calculator)); \(state(of: calculator))")
+    click(calculator)
+    pause(2)
+    say("PROBE desktop, after a click on the icon: \(boundsOnScreen(calculator)); \(state(of: calculator))")
+    pressEscape()
+    calculator.terminate()
+}
+
+func describe(_ element: AXUIElement) -> String {
+    var names: CFArray?
+    AXUIElementCopyAttributeNames(element, &names)
+    let attributes = (names as? [String]) ?? []
+    var parts: [String] = []
+    for attribute in attributes {
+        if let found = value(element, attribute) as? String, !found.isEmpty {
+            parts.append("\(attribute)=\(found)")
+        } else if let found = value(element, attribute) as? Bool {
+            parts.append("\(attribute)=\(found)")
+        }
+    }
+    return parts.joined(separator: "; ")
+}
+
+/// What is there to tell the windows of Edge profiles apart, and to bring
+/// one profile to the front?
+func probeEdge() {
+    let edge = "/Applications/Microsoft Edge.app"
+    guard FileManager.default.fileExists(atPath: edge) else {
+        say("PROBE edge: not installed")
+        return
+    }
+    let data = FileManager.default.temporaryDirectory
+        .appendingPathComponent("supersurfer-edge-probe-\(ProcessInfo.processInfo.processIdentifier)").path
+    func launch(_ profile: String, _ url: String?) {
+        var arguments = [
+            "-na", edge, "--args",
+            "--user-data-dir=\(data)", "--profile-directory=\(profile)",
+            "--no-first-run", "--no-default-browser-check",
+        ]
+        if let url = url {
+            arguments.append(url)
+        }
+        run("/usr/bin/open", arguments)
+    }
+    func running() -> NSRunningApplication? {
+        return NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.edgemac")
+            .first { $0.activationPolicy == .regular }
+    }
+    func windows(_ label: String) {
+        guard let app = running() else {
+            say("PROBE edge, \(label): not running")
+            return
+        }
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        let all = elements(element, kAXWindowsAttribute)
+        say("PROBE edge, \(label): \(all.count) windows, \(windowsOnScreen(app)) on screen, in front: "
+            + "\(NSWorkspace.shared.frontmostApplication.map(name) ?? "nothing")")
+        for window in all {
+            say("PROBE edge, \(label):   window \(describe(window))")
+        }
+        if let focused = value(element, kAXFocusedWindowAttribute) {
+            say("PROBE edge, \(label):   focused: \(text(focused as! AXUIElement, kAXTitleAttribute) ?? "?")")
+        }
+    }
+
+    launch("Default", "about:blank")
+    guard waitUntil(40, { running().map { windowsOnScreen($0) > 0 } ?? false }), let app = running() else {
+        say("PROBE edge: did not start")
+        return
+    }
+    pause(5)
+    windows("one profile")
+    launch("Profile 1", "about:blank")
+    pause(6)
+    launch("Profile 2", "about:blank")
+    pause(6)
+    windows("three profiles")
+
+    let element = AXUIElementCreateApplication(app.processIdentifier)
+    var profileItems: [AXUIElement] = []
+    if let bar = value(element, kAXMenuBarAttribute) {
+        for menu in elements(bar as! AXUIElement, kAXChildrenAttribute) {
+            let title = text(menu, kAXTitleAttribute) ?? "?"
+            let items = elements(menu, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) }
+            let titles = items.map { text($0, kAXTitleAttribute) ?? "" }
+            say("PROBE edge, menu \(title): \(titles.count) items")
+            if title.lowercased().contains("profil") || title == "Window" || title == "Microsoft Edge" {
+                say("PROBE edge, menu \(title): \(titles)")
+            }
+            if title.lowercased().contains("profil") {
+                profileItems = items
+            }
+        }
+    }
+
+    for item in profileItems.prefix(4) {
+        let title = text(item, kAXTitleAttribute) ?? ""
+        guard !title.isEmpty else {
+            continue
+        }
+        let result = AXUIElementPerformAction(item, kAXPressAction as CFString)
+        pause(2.5)
+        say("PROBE edge, after choosing \(title) in the menu (error \(result.rawValue)):")
+        windows("chose \(title)")
+    }
+
+    _ = bringToFront("Finder", "com.apple.finder")
+    launch("Default", nil)
+    pause(5)
+    windows("started again with the first profile and no address")
+
+    for instance in NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.edgemac") {
+        instance.terminate()
+    }
+    pause(2)
+    try? FileManager.default.removeItem(atPath: data)
+}
+
 func probeModes() {
     let calculator = bringToFront("Calculator", "com.apple.calculator", windows: 1)
     dumpDock("normal")
@@ -848,6 +987,10 @@ func probeModes() {
 switch CommandLine.arguments.dropFirst().first {
 case "probe-modes":
     probeModes()
+case "probe-desktop":
+    probeShowDesktop()
+case "probe-edge":
+    probeEdge()
 case "preflight":
     preflight()
 case "control":
