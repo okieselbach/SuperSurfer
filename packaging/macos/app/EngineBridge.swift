@@ -46,6 +46,8 @@ struct RouteReply: Decodable {
     let launch: LaunchPlan?
     let launchError: String?
     let configError: String?
+    /// Microseconds the engine itself spent on the request.
+    let engineMicros: Int?
 }
 
 struct PlanReply: Decodable {

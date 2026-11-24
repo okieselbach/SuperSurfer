@@ -24,6 +24,9 @@ struct RouteTimes {
     let asked: DispatchTime
     /// The engine answered.
     let answered: DispatchTime
+    /// Of the time between `asked` and `answered`, what the engine itself
+    /// used. The rest is the trip to its thread and back.
+    let coreMs: Double?
 
     static func milliseconds(from start: DispatchTime, to end: DispatchTime) -> Double {
         return Double(end.uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
@@ -167,8 +170,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let asked = DispatchTime.now()
             let reply = engine.route(url: input, opener: opener, modifiers: modifiers, preview: askUser)
             let answered = DispatchTime.now()
+            let coreMs = reply?.engineMicros.map { Double($0) / 1_000 }
             let times = started.map { received in
-                RouteTimes(received: received, queued: queued, asked: asked, answered: answered)
+                RouteTimes(received: received, queued: queued, asked: asked, answered: answered, coreMs: coreMs)
             }
             DispatchQueue.main.async {
                 self.finishRoute(input: input, reply: reply, askUser: askUser, times: times)
@@ -219,8 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let engineMs = RouteTimes.milliseconds(from: times.asked, to: times.answered)
             let backMs = RouteTimes.milliseconds(from: times.answered, to: handedOver)
             let parts = String(
-                format: "event %.2f, queue %.2f, engine %.2f, back to main %.2f",
-                eventMs, queueMs, engineMs, backMs
+                format: "event %.2f, queue %.2f, engine %.2f of which core %.2f, back to main %.2f",
+                eventMs, queueMs, engineMs, times.coreMs ?? 0, backMs
             )
             fputs("SuperSurfer: routed \(decision.inputUrl) to \(browser) in \(Format.milliseconds(elapsedMs)) (\(parts))\n", stderr)
         }

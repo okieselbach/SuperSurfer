@@ -93,7 +93,11 @@ fn log_path() -> PathBuf {
     supersurfer::logging::log_file().unwrap()
 }
 
-fn log_text() -> String {
+/// The decision log as it is once the engine got around to writing it. The
+/// log is written after the reply, in `maintain`, so a click never waits for
+/// the disk.
+fn log_text(engine: &mut Engine) -> String {
+    engine.maintain();
     fs::read_to_string(log_path()).unwrap_or_default()
 }
 
@@ -152,7 +156,9 @@ fn routes_to_the_default_browser_and_reports_how_to_launch_it() {
     assert_eq!(reply["launchError"], Value::Null);
     assert_eq!(reply["configError"], Value::Null);
 
-    assert!(log_text().contains("https://www.example.com/page"));
+    // Nothing touches the log before the reply is out.
+    assert!(!log_path().exists());
+    assert!(log_text(&mut engine).contains("https://www.example.com/page"));
 }
 
 #[test]
@@ -171,6 +177,7 @@ fn reply_shapes_match_what_the_app_decodes() {
         [
             "configError",
             "decision",
+            "engineMicros",
             "error",
             "launch",
             "launchError",
@@ -442,7 +449,7 @@ fn links_still_open_when_the_config_never_loaded() {
     // Without a config there is no cleaning mode to apply: the URL is untouched.
     assert_eq!(reply["launch"]["url"], "https://example.com/?utm_source=x");
     assert!(reply["configError"].is_string());
-    assert!(log_text().contains("[config.js not loaded]"));
+    assert!(log_text(&mut engine).contains("[config.js not loaded]"));
 
     // The picker still works too.
     let browsers = call(&mut engine, json!({ "op": "browsers" }));
@@ -462,7 +469,7 @@ fn preview_leaves_the_log_alone_and_a_pick_is_logged() {
         json!({ "op": "route", "url": SAFELINK, "preview": true }),
     );
     assert_eq!(reply["ok"], true, "{reply}");
-    assert_eq!(log_text(), "");
+    assert_eq!(log_text(&mut engine), "");
 
     let decision = &reply["decision"];
     let reply = call(
@@ -477,7 +484,7 @@ fn preview_leaves_the_log_alone_and_a_pick_is_logged() {
     assert_eq!(reply["ok"], true, "{reply}");
     assert_eq!(reply["launch"]["url"], SAFELINK);
     assert!(!reply["browser"].as_str().unwrap().is_empty());
-    let log = log_text();
+    let log = log_text(&mut engine);
     assert_eq!(log.lines().count(), 1);
     assert!(log.trim_end().ends_with("[picked]"), "{log}");
 }

@@ -34,11 +34,13 @@ fn engine_thread() -> Option<&'static Sender<Job>> {
                 .name("supersurfer-engine".to_string())
                 .stack_size(4 * 1024 * 1024)
                 .spawn(move || {
+                    prioritize_current_thread();
                     let mut engine = Engine::new();
                     while let Ok(job) = receiver.recv() {
                         job(&mut engine);
                         // Answer everything that queued up meanwhile before
-                        // doing any housekeeping: a waiting click comes first.
+                        // the log is written and the browser list refreshed:
+                        // a waiting click comes first.
                         while let Ok(job) = receiver.try_recv() {
                             job(&mut engine);
                         }
@@ -52,6 +54,22 @@ fn engine_thread() -> Option<&'static Sender<Job>> {
         })
         .as_ref()
 }
+
+/// A click is waiting for this thread, so it must not queue behind ordinary
+/// background work. Threads from `std::thread` carry no QoS class on macOS,
+/// and the caller (a user-interactive dispatch queue) cannot lend its own
+/// across a channel; without this the scheduler is free to run the engine
+/// last exactly when the machine is busy.
+#[cfg(target_os = "macos")]
+fn prioritize_current_thread() {
+    // SAFETY: affects only the calling thread; failure leaves it unchanged.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn prioritize_current_thread() {}
 
 fn call_engine(request: String) -> String {
     let Some(sender) = engine_thread() else {

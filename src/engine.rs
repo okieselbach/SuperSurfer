@@ -10,6 +10,8 @@
 //!   size changed, checked on demand rather than by polling.
 //! - The browser list is refreshed while idle, after a reply has gone out, and
 //!   on the spot when a browser cannot be resolved.
+//! - The decision log is written after the reply as well ([`Engine::maintain`]),
+//!   so a click never waits for the disk.
 //! - A `config.js` that stops loading does not take routing down: the last
 //!   version that worked stays in use and the error is reported.
 //!
@@ -203,6 +205,9 @@ pub struct RouteReply {
     /// Set while `config.js` fails to load, even when routing still works from
     /// the last good version.
     pub config_error: Option<String>,
+    /// Time the engine itself spent on this request, in microseconds. What a
+    /// caller measures on top of this is the trip to the engine and back.
+    pub engine_micros: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -289,6 +294,8 @@ pub struct Engine {
     registry_fresh: bool,
     bootstrapped: bool,
     fresh_bootstrap: bool,
+    /// Decision-log lines waiting to be written by [`Engine::maintain`].
+    pending_log: Vec<String>,
 }
 
 impl Default for Engine {
@@ -310,10 +317,18 @@ impl Engine {
             registry_fresh: false,
             bootstrapped: false,
             fresh_bootstrap: false,
+            pending_log: Vec::new(),
         }
     }
 
     pub fn route(&mut self, request: &RouteRequest) -> RouteReply {
+        let started = Instant::now();
+        let mut reply = self.route_inner(request);
+        reply.engine_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        reply
+    }
+
+    fn route_inner(&mut self, request: &RouteRequest) -> RouteReply {
         self.refresh();
         let context = Context {
             opener: request.opener.clone().map(Opener::from),
@@ -340,7 +355,7 @@ impl Engine {
         match decided {
             Ok(decision) => {
                 if !request.preview {
-                    log_decision(&decision.log_line());
+                    self.pending_log.push(decision.log_line());
                 }
                 let source = decision.source.as_str();
                 self.reply(&decision, source)
@@ -518,14 +533,25 @@ impl Engine {
         }
     }
 
-    /// Housekeeping for idle moments. Hosts call this after a reply went out,
-    /// never before, so no click waits for it.
+    /// Work that can wait until the answer is out: writing the decision log
+    /// and keeping the browser list current. Hosts call this after delivering
+    /// a reply, never before, so no click waits for it.
     pub fn maintain(&mut self) {
+        self.flush_log();
         if self.router.is_none() {
             return;
         }
         if !self.registry_fresh || self.registry_checked.elapsed() > REGISTRY_MAX_AGE {
             self.refresh_registry();
+        }
+    }
+
+    fn flush_log(&mut self) {
+        for line in self.pending_log.drain(..) {
+            // Never gate browser launch on log I/O (permissions, full disk, etc.).
+            if let Err(err) = crate::logging::append_decision(&line) {
+                eprintln!("warning: failed to append decision log: {err}");
+            }
         }
     }
 
@@ -613,6 +639,7 @@ impl Engine {
             launch,
             launch_error,
             config_error: self.config_error.clone(),
+            engine_micros: 0,
         }
     }
 
@@ -653,7 +680,8 @@ impl Engine {
         match emergency() {
             Ok(decision) => {
                 if !preview {
-                    log_decision(&format!("{} [config.js not loaded]", decision.log_line()));
+                    self.pending_log
+                        .push(format!("{} [config.js not loaded]", decision.log_line()));
                 }
                 self.reply(&decision, "emergency")
             }
@@ -703,7 +731,8 @@ impl Engine {
             rule_domain: None,
         };
         let plan = launch::launch_plan(&decision)?;
-        log_decision(&format!("{} [picked]", decision.log_line()));
+        self.pending_log
+            .push(format!("{} [picked]", decision.log_line()));
         Ok(PlanReply {
             ok: true,
             error: None,
@@ -772,10 +801,9 @@ fn browser_info(install: &BrowserInstall) -> Option<BrowserInfo> {
     })
 }
 
-fn log_decision(line: &str) {
-    // Never gate browser launch on log I/O (permissions, full disk, etc.).
-    if let Err(err) = crate::logging::append_decision(line) {
-        eprintln!("warning: failed to append decision log: {err}");
+impl Drop for Engine {
+    fn drop(&mut self) {
+        self.flush_log();
     }
 }
 
@@ -790,7 +818,8 @@ fn to_json<T: Serialize>(reply: &T) -> String {
         .unwrap_or_else(|err| error_json(&format!("reply could not be encoded: {err}")))
 }
 
-/// Answer one JSON request. See [`Request`] for the operations.
+/// Answer one JSON request. See [`Request`] for the operations. Call
+/// [`Engine::maintain`] once the reply has been delivered.
 pub fn handle_json(engine: &mut Engine, request: &str) -> String {
     match serde_json::from_str::<Request>(request) {
         Ok(Request::Route(request)) => to_json(&engine.route(&request)),
