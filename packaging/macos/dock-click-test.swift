@@ -880,50 +880,82 @@ func describe(_ element: AXUIElement) -> String {
 /// one profile to the front?
 func probeEdge() {
     let edge = "/Applications/Microsoft Edge.app"
-    guard FileManager.default.fileExists(atPath: edge) else {
+    let binary = edge + "/Contents/MacOS/Microsoft Edge"
+    guard FileManager.default.fileExists(atPath: binary) else {
         say("PROBE edge: not installed")
         return
     }
     let data = FileManager.default.temporaryDirectory
         .appendingPathComponent("supersurfer-edge-probe-\(ProcessInfo.processInfo.processIdentifier)").path
+    var started: [Process] = []
     func launch(_ profile: String, _ url: String?) {
         var arguments = [
-            "-na", edge, "--args",
             "--user-data-dir=\(data)", "--profile-directory=\(profile)",
-            "--no-first-run", "--no-default-browser-check",
+            "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--use-mock-keychain",
         ]
         if let url = url {
             arguments.append(url)
         }
-        run("/usr/bin/open", arguments)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            started.append(process)
+            say("PROBE edge: started with profile \(profile), pid \(process.processIdentifier)")
+        } catch {
+            say("PROBE edge: could not start: \(error.localizedDescription)")
+        }
     }
     func running() -> NSRunningApplication? {
         return NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.edgemac")
             .first { $0.activationPolicy == .regular }
+    }
+    func everything(_ label: String) {
+        // Who has windows on screen, whatever their layer: a dialog from the
+        // system would show up here.
+        let options: CGWindowListOption = [.optionOnScreenOnly]
+        let list = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+        var owners: [String: Int] = [:]
+        for window in list {
+            let owner = (window[kCGWindowOwnerName as String] as? String) ?? "?"
+            let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
+            owners["\(owner)@\(layer)", default: 0] += 1
+        }
+        let summary = owners.sorted { $0.key < $1.key }.map { $0.key + "x" + String($0.value) }
+        say("PROBE edge, \(label): on screen " + summary.joined(separator: " "))
     }
     func windows(_ label: String) {
         guard let app = running() else {
             say("PROBE edge, \(label): not running")
             return
         }
-        let element = AXUIElementCreateApplication(app.processIdentifier)
-        let all = elements(element, kAXWindowsAttribute)
-        say("PROBE edge, \(label): \(all.count) windows, \(windowsOnScreen(app)) on screen, in front: "
+        say("PROBE edge, \(label): \(windowsOnScreen(app)) windows on screen, in front: "
             + "\(NSWorkspace.shared.frontmostApplication.map(name) ?? "nothing")")
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        var found: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &found)
+        let all = (found as? [AXUIElement]) ?? []
+        say("PROBE edge, \(label): Accessibility lists \(all.count) windows (error \(result.rawValue))")
         for window in all {
             say("PROBE edge, \(label):   window \(describe(window))")
         }
-        if let focused = value(element, kAXFocusedWindowAttribute) {
-            say("PROBE edge, \(label):   focused: \(text(focused as! AXUIElement, kAXTitleAttribute) ?? "?")")
-        }
     }
 
+    say("PROBE edge: starting")
     launch("Default", "about:blank")
-    guard waitUntil(40, { running().map { windowsOnScreen($0) > 0 } ?? false }), let app = running() else {
-        say("PROBE edge: did not start")
+    let up = waitUntil(40, { running().map { windowsOnScreen($0) > 0 } ?? false })
+    say("PROBE edge: \(up ? "has a window" : "no window after 40 s"), running: \(running() != nil)")
+    everything("after start")
+    guard up, let app = running() else {
+        for process in started where process.isRunning {
+            process.terminate()
+        }
         return
     }
-    pause(5)
+    pause(4)
     windows("one profile")
     launch("Profile 1", "about:blank")
     pause(6)
@@ -939,24 +971,26 @@ func probeEdge() {
             let items = elements(menu, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) }
             let titles = items.map { text($0, kAXTitleAttribute) ?? "" }
             say("PROBE edge, menu \(title): \(titles.count) items")
-            if title.lowercased().contains("profil") || title == "Window" || title == "Microsoft Edge" {
+            if title.lowercased().contains("profil") || title == "Window" {
                 say("PROBE edge, menu \(title): \(titles)")
             }
             if title.lowercased().contains("profil") {
                 profileItems = items
             }
         }
+    } else {
+        say("PROBE edge: no menu bar through Accessibility")
     }
 
-    for item in profileItems.prefix(4) {
+    for item in profileItems.prefix(3) {
         let title = text(item, kAXTitleAttribute) ?? ""
         guard !title.isEmpty else {
             continue
         }
         let result = AXUIElementPerformAction(item, kAXPressAction as CFString)
         pause(2.5)
-        say("PROBE edge, after choosing \(title) in the menu (error \(result.rawValue)):")
-        windows("chose \(title)")
+        say("PROBE edge: chose \(title) in the menu (error \(result.rawValue))")
+        windows("after \(title)")
     }
 
     _ = bringToFront("Finder", "com.apple.finder")
@@ -965,7 +999,7 @@ func probeEdge() {
     windows("started again with the first profile and no address")
 
     for instance in NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.edgemac") {
-        instance.terminate()
+        instance.forceTerminate()
     }
     pause(2)
     try? FileManager.default.removeItem(atPath: data)
