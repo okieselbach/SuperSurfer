@@ -51,7 +51,7 @@ struct ProfileNames {
     private let profiles: [String: [Profile]]
 
     /// Nothing is known: every profile is shown as it is given.
-    static let none = ProfileNames(browsers: [], shortcuts: [])
+    static let empty = ProfileNames(browsers: [], shortcuts: [])
 
     init(browsers: [ShortcutBrowser], shortcuts: [ProfileShortcut]) {
         var profiles: [String: [Profile]] = [:]
@@ -93,7 +93,7 @@ struct ProfileNames {
     static func current(engine: EngineBridge) -> ProfileNames {
         let browsers = engine.shortcuts()?.browsers ?? []
         guard !browsers.isEmpty else {
-            return .none
+            return .empty
         }
         return ProfileNames(browsers: browsers, shortcuts: ProfileShortcut.all(in: ProfileShortcuts.folder))
     }
@@ -276,7 +276,7 @@ struct ProfileNames {
                 "profile names: what is not known is shown as it is given",
                 names.shown("Nobody", of: "edge") == "Nobody"
                     && names.shown("Oliver", of: "firefox") == "Oliver"
-                    && ProfileNames.none.shown("Oliver", of: "edge") == "Oliver"
+                    && ProfileNames.empty.shown("Oliver", of: "edge") == "Oliver"
             )
             check(
                 "profile names: two ways of naming one profile",
@@ -301,7 +301,7 @@ struct ProfileNames {
                 listed.map { $0.shown } == ["DevEnv", "GMail", "Personal", "Work"]
                     && listed.map { $0.given } == ["DevEnv", "GMail", "Profile 2", "Oliver"]
             )
-            let untouched = ProfileNames.none.listed(["b", "A"], of: "edge")
+            let untouched = ProfileNames.empty.listed(["b", "A"], of: "edge")
             check(
                 "profile names: and as it came where no name was chosen",
                 untouched.map { $0.given } == ["b", "A"] && untouched.map { $0.shown } == ["b", "A"]

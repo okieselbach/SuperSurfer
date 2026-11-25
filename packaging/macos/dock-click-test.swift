@@ -983,6 +983,22 @@ struct TestBrowser {
     let bundleID: String
     /// Where it keeps its profiles, below Library/Application Support.
     let dataFolder: String
+    /// Whether the test has SuperSurfer start this browser a second time,
+    /// through the picker, and waits each time until macOS has answered
+    /// the start before it quits the browser.
+    ///
+    /// Not Edge. Launch Services hands on what one app asks it to open one
+    /// request at a time, and each waits for its answer, so a start that is
+    /// not answered holds up everything SuperSurfer asks for after it. On
+    /// GitHub's macOS 15 runner a start of Edge is not always answered: in
+    /// run 65 it was not after 40 s, with Edge there all the time. In runs
+    /// 63 and 64 Edge was started a second time and quit seven seconds
+    /// later. That start was never answered, not even once Edge was gone,
+    /// and Chrome, asked for a minute and a half later, never came. What
+    /// has worked for Edge every time is one start that is quit within
+    /// three seconds: macOS then answers that the start failed, or that it
+    /// went well.
+    let startedTwice: Bool
 }
 
 let testBrowsers = [
@@ -993,7 +1009,8 @@ let testBrowsers = [
         appPath: "/Applications/Microsoft Edge.app",
         binary: "Microsoft Edge",
         bundleID: "com.microsoft.edgemac",
-        dataFolder: "Microsoft Edge"
+        dataFolder: "Microsoft Edge",
+        startedTwice: false
     ),
     TestBrowser(
         id: "chrome",
@@ -1002,7 +1019,8 @@ let testBrowsers = [
         appPath: "/Applications/Google Chrome.app",
         binary: "Google Chrome",
         bundleID: "com.google.Chrome",
-        dataFolder: "Google/Chrome"
+        dataFolder: "Google/Chrome",
+        startedTwice: true
     ),
 ]
 
@@ -1428,15 +1446,9 @@ func testShortcuts(
         }
     }
     /// Waits until macOS has answered SuperSurfer a start it was asked for.
-    /// `before` is what `answeredStarts` said before the start was asked for.
-    ///
-    /// A browser is not quit before that. Launch Services hands on what one
-    /// app asks it to open one request at a time, and each waits for its
-    /// answer. Runs 63 and 64 quit Edge three seconds after SuperSurfer had
-    /// started it, and again seven seconds after it had started it a second
-    /// time. The second start was never answered, not even once Edge was
-    /// gone, and with that SuperSurfer could start nothing more: Chrome,
-    /// asked for a minute and a half later, never came.
+    /// `before` is what `answeredStarts` said before the start was asked
+    /// for. See `TestBrowser.startedTwice` for why a browser that is to be
+    /// started again is not quit before that.
     func awaitAnswer(since before: Int) {
         let began = Date()
         guard waitUntil(40, { answeredStarts() > before }) else {
@@ -1916,6 +1928,11 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
+        guard browser.startedTwice else {
+            pause(2)
+            quit()
+            return
+        }
         awaitAnswer(since: answeredSoFar)
         pause(2)
         quit()
