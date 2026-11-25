@@ -2069,20 +2069,36 @@ func testUnanswered(home: String, superSurfer: String, trace: String) {
     }
     say("ok    three seconds later macOS has not answered that start")
 
-    say("-- a link for another browser opens all the same")
+    say("-- a link for another browser does not wait for it")
     let began = Date()
     run("/usr/bin/open", ["-g", "-a", superSurfer, page])
-    let shown = waitUntil(40) {
+    // SuperSurfer's part: it hands the link on, by the other way.
+    guard waitUntil(5, { traced("Safari.app is asked for through /usr/bin/open") }) else {
+        giveUp("5 s after it was given the link SuperSurfer has not handed it on through /usr/bin/open")
+    }
+    say(String(format: "ok    SuperSurfer handed it on through /usr/bin/open within %.1f s", Date().timeIntervalSince(began)))
+    // Safari's part, which on a runner includes starting.
+    let shown = waitUntil(60) {
         safari().map { window(of: $0, showing: "sst-after") != nil } ?? false
     }
     guard shown else {
-        giveUp("Safari does not show the page 40 s after SuperSurfer was given the link")
+        giveUp("Safari does not show the page 60 s after SuperSurfer was given the link")
     }
-    say(String(format: "ok    Safari shows it %.1f s after SuperSurfer was given the link", Date().timeIntervalSince(began)))
-    guard traced("Safari.app is asked for through /usr/bin/open"), traced("macOS has not answered a start for") else {
-        giveUp("SuperSurfer's trace does not say that the link went through /usr/bin/open")
+    say(String(format: "ok    and Safari shows the page, %.1f s after the link was sent", Date().timeIntervalSince(began)))
+
+    // Ten seconds after a request that macOS has not answered. That is the
+    // sleeping app, unless a browser of the steps before was quit at a
+    // moment that left its start unanswered as well: then it is that one.
+    say("-- the system log gets a line about the answer that does not come")
+    func note() -> String? {
+        return ((try? String(contentsOfFile: trace, encoding: .utf8)) ?? "")
+            .components(separatedBy: "\n")
+            .first { $0.hasPrefix("SuperSurfer: macOS was asked for ") && $0.contains(" s ago and has not answered") }
     }
-    say("ok    and SuperSurfer says that it went through /usr/bin/open")
+    guard waitUntil(20, { note() != nil }) else {
+        giveUp("SuperSurfer's trace has no line about a start that macOS did not answer")
+    }
+    say("ok    \(note() ?? "")")
     tidyUp()
 }
 

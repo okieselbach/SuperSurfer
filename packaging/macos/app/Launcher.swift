@@ -107,6 +107,11 @@ struct LaunchLane<Request> {
         return waiting.removeFirst()
     }
 
+    /// Whether the request numbered `generation` is still with macOS.
+    func inHand(_ generation: Int) -> Bool {
+        return generation == self.generation && inHandSince != nil
+    }
+
     /// Patience with the request numbered `generation` may be over. Returns
     /// the requests that waited behind it, which go another way now. None
     /// if that request has been answered meanwhile, or its time is not up.
@@ -131,11 +136,13 @@ enum Launcher {
     /// it goes through /usr/bin/open. Answers take a few tenths of a second
     /// where all is well.
     static let patience: TimeInterval = 1
+    /// After how long without an answer the system log gets a line. A
+    /// browser that has to start takes a second or three, which is nothing
+    /// to write down.
+    static let worry: TimeInterval = 10
 
     private static let lock = NSLock()
     private static var lane = LaunchLane<LaunchRequest>()
-    /// The request whose missing answer the log already has a line about.
-    private static var notedGeneration = 0
     /// The `open` processes that have not ended yet.
     private static var asides: [ObjectIdentifier: Process] = [:]
     private static let clockQueue = DispatchQueue(label: "dev.supersurfer.launch", qos: .userInitiated)
@@ -227,14 +234,8 @@ enum Launcher {
 
     private static func send(_ request: LaunchRequest) {
         lock.lock()
-        let moment = now()
-        let way = lane.arrive(request, at: moment, patience: patience)
+        let way = lane.arrive(request, at: now(), patience: patience)
         let generation = lane.generation
-        let unanswered = lane.inHandSince.map { moment - $0 } ?? 0
-        let firstAside = way == .aside && notedGeneration != generation
-        if firstAside {
-            notedGeneration = generation
-        }
         lock.unlock()
 
         switch way {
@@ -245,9 +246,6 @@ enum Launcher {
             // with the end of patience, whichever is first.
             break
         case .aside:
-            if firstAside {
-                noteNoAnswer(for: unanswered)
-            }
             sendAside(request)
         }
     }
@@ -257,16 +255,25 @@ enum Launcher {
         clockQueue.asyncAfter(deadline: .now() + patience) {
             lock.lock()
             let late = lane.outOfPatience(with: generation, at: now(), patience: patience)
-            let first = !late.isEmpty && notedGeneration != generation
-            if first {
-                notedGeneration = generation
-            }
             lock.unlock()
-            if first {
-                noteNoAnswer(for: patience)
-            }
             for waiting in late {
                 sendAside(waiting)
+            }
+        }
+        clockQueue.asyncAfter(deadline: .now() + worry) {
+            lock.lock()
+            let unanswered = lane.inHand(generation)
+            lock.unlock()
+            guard unanswered else {
+                return
+            }
+            // Worth a line in the system log: links still open, but this is
+            // what to look for when a browser was asked for and never came.
+            let text = "macOS was asked for \(request.name) \(Int(worry)) s ago and has not answered. "
+                + "Until it does, what is to be opened goes through /usr/bin/open."
+            NSLog("SuperSurfer: %@", text)
+            if AppDelegate.traceToStderr {
+                fputs("SuperSurfer: \(text)\n", stderr)
             }
         }
         let answered: (Error?) -> Void = { error in
@@ -352,17 +359,6 @@ enum Launcher {
         }
     }
 
-    private static func noteNoAnswer(for seconds: TimeInterval) {
-        let text = String(
-            format: "macOS has not answered a start for %.1f s. Until it does, what is to be opened goes through /usr/bin/open.",
-            seconds
-        )
-        NSLog("SuperSurfer: %@", text)
-        if AppDelegate.traceToStderr {
-            fputs("SuperSurfer: \(text)\n", stderr)
-        }
-    }
-
     // MARK: - Self-test
 
     static func selfTest(_ check: (String, Bool) -> Void) {
@@ -372,7 +368,7 @@ enum Launcher {
         let third = lane.arrive("c", at: 10.4, patience: 1)
         check(
             "starts: one request is with macOS at a time, the next ones wait",
-            first == .direct && second == .wait && third == .wait && lane.generation == 1
+            first == .direct && second == .wait && third == .wait && lane.generation == 1 && lane.inHand(1)
         )
         check(
             "starts: they wait as long as patience lasts",
@@ -382,6 +378,7 @@ enum Launcher {
         check(
             "starts: with the answer the next one has its turn",
             next == "b" && lane.generation == 2 && lane.waiting == ["c"] && lane.inHandSince == 10.6
+                && !lane.inHand(1) && lane.inHand(2)
         )
         check(
             "starts: patience is with the request that is with macOS now",
@@ -393,7 +390,7 @@ enum Launcher {
         check("starts: and so does what comes after", lane.arrive("d", at: 11.8, patience: 1) == .aside && lane.waiting.isEmpty)
         check(
             "starts: once the answer is there all is as before",
-            lane.answered(at: 30) == nil && lane.inHandSince == nil
+            lane.answered(at: 30) == nil && lane.inHandSince == nil && !lane.inHand(2)
                 && lane.arrive("e", at: 30.1, patience: 1) == .direct && lane.generation == 3
         )
 
