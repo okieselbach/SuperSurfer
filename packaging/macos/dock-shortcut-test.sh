@@ -7,8 +7,10 @@
 # HOME, makes shortcuts for two of them in SuperSurfer's menu, uses them and
 # checks that the window of the right profile is in front: from behind
 # another app, out of the Dock, with the browser hidden, and for a profile
-# that has no window. The pointer moves and windows come and go while it
-# runs, so keep your hands off the Mac for the five minutes it takes.
+# that has no window. One shortcut gets another name in the menu and one in
+# the way the Finder renames, and both have to work on under it. The pointer
+# moves and windows come and go while it runs, so keep your hands off the Mac
+# for the five minutes it takes.
 #
 # Needs what dock-click-test.sh needs: a logged-in session in which this
 # shell may use Accessibility. Edge, Chrome and SuperSurfer must not be
