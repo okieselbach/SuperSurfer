@@ -106,6 +106,8 @@ The menu:
 | **Picker Key** | Which modifier key opens the picker: ⌥ Option (default), ⇧ Shift, ⌃ Control, ⌘ Command, fn, or off. |
 | **Choose Browser for Copied Link…** | The picker for the link in the clipboard. Also the quickest way to see how a link *would* be routed. |
 | **Edit config.js**, **Show Config Folder**, **Show Decision Log**, **Reload Configuration** | Shortcuts to the files. Config changes are picked up on the next link by themselves, and the list of browsers and profiles is refreshed in the background; reloading re-reads all of it at once, e.g. right after adding a browser profile. |
+| **Dock Click** | Not about links: what a click on the Dock icon of the app in front does. Off unless you choose otherwise. See [Dock Click](#dock-click). |
+| **Dock Shortcuts** | Not about links either: an icon in the Dock for one profile of Edge or Chrome, which brings that profile's window to the front. See [Dock Shortcuts](#dock-shortcuts). |
 | **Launch at Login** | Start with the Mac (macOS 13 or later), so the first click of the day is as fast as the rest. |
 | **Make SuperSurfer the Default Browser** | Shown while something else is the default. |
 
@@ -126,6 +128,75 @@ Hold the picker key (⌥ Option by default) while clicking a link and a menu ope
 Escape closes the menu and the link is not opened. Without the key, nothing ever asks: links follow `config.js`, then the saved rules, then `defaultBrowser`.
 
 Some apps use ⌥-click themselves (browsers download the link target). Pick another key in the menu if that gets in the way.
+
+### Dock Click
+
+Clicking the Dock icon of the app you are already in normally does nothing on macOS. **Dock Click** in the menu gives that click a job, as on Windows and most Linux desktops:
+
+| Choice | A click on the icon of the app in front | The next click on the icon |
+|---|---|---|
+| **Hide App** | hides the app, like ⌘H | shows it again (macOS does that by itself) |
+| **Minimize Windows** | sends every window the app has on the current Space into the Dock | brings back all of them, where macOS alone brings back one |
+| **Off** *(default)* | nothing | |
+
+This has nothing to do with routing links. It is here because SuperSurfer is loaded anyway, which is cheaper than one more menu bar utility. While it is off, nothing is installed and no permission is needed.
+
+**When it acts.** On a plain click on the Dock icon of the app that has been in front for at least three quarters of a second, and only if the Dock itself makes nothing of that click. Everything else is left to the Dock:
+
+- a click on the icon of another app, which switches to that app, and a second click on it while the app is still arriving;
+- a long press, which opens the icon's menu, and a click with ⌘, ⌥, ⌃ or ⇧ held;
+- a click while Mission Control, App Exposé or Show Desktop is up, where it is the way back to the app (a force click on the icon opens App Exposé);
+- a click on the icon of an app without a window on screen, which is how you ask for one;
+- a click on a menu, a notification or any other window that happens to lie over the icon.
+
+A double click ends where it began: its second click never puts anything away, and brings back what the first one put away.
+
+**Minimize Windows moves the Dock.** Every minimized window gets a place in the Dock, and the Dock shifts its icons to make room, so after the click the pointer may no longer be on the app's icon. Switch on System Settings → Desktop & Dock → *Minimize windows into application icon* and the icons stay where they are. *Hide App* never moves anything. Windows on other Spaces and full-screen windows are not minimized. If you bring one of the minimized windows back by hand, Dock Click forgets the others; they stay where you left them.
+
+**Permission.** The first time you choose *Hide App* or *Minimize Windows*, macOS asks for the Accessibility permission (System Settings → Privacy & Security → Accessibility). SuperSurfer needs it to ask the Dock which icon is under the pointer and to minimize another app's windows. It works from the next click. Until the permission is there, the menu entry carries a ⚠︎ and clicks behave as always.
+
+macOS ties this permission to the app's signature, and releases are not signed with a Developer ID yet. After an update the switch in System Settings still looks on but no longer counts: remove SuperSurfer from that list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
+
+**What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. The window server writes into each click which window it went to, and for a click that did not go to the Dock reading that is all that happens: 0.01 to 0.02 ms on the main thread, measured on GitHub's macOS runners, and 0.2 ms in the one run where the machine was busy. Only a click on the Dock leads to more: a look at which app is in front, on the main thread, and a question to the Dock about the icon, on a queue of its own with a timeout of 0.4 s. Minimizing and restoring windows runs on a second queue. Neither the main thread nor the queue that routes links ever waits for another app. Between clicks the app is as idle as before.
+
+**Tested, and not.** `packaging/macos/dock-click-test.sh` clicks real Dock icons. It runs in CI on macOS 15 and has also passed on GitHub's macOS 26 runner. It covers what is listed above except the force click, which a test cannot produce, and the long press and modifier keys, for which only the rules in `--self-test` are checked. Not tested at all: an app with windows on more than one Space (macOS then answers the click by moving to the other Space; Dock Click steps aside if it sees the Space or the app's windows change in time), several displays, and Stage Manager.
+
+### Dock Shortcuts
+
+On Windows a browser profile can have a button of its own in the taskbar. **Dock Shortcuts** in the menu gives macOS the nearest thing for Microsoft Edge and Google Chrome: an icon in the Dock per profile.
+
+Choose a profile under **Dock Shortcuts** and SuperSurfer writes a small app for it into `~/Applications/SuperSurfer Shortcuts`, named after browser and profile ("Edge Work"), with the browser's icon and a badge for the profile. The Finder shows it; drag it into the Dock. A click on it:
+
+| The profile… | What the click does |
+|---|---|
+| has a window | brings it to the front, also from behind another app, out of the Dock, or when the browser is hidden |
+| has no window | has the browser open one |
+| belongs to a browser that is not running | starts the browser with that profile |
+
+Like Dock Click this has nothing to do with routing links, and none of it runs until a shortcut is clicked or the menu is opened.
+
+**How it works.** The app is a few lines of shell script that tell SuperSurfer which profile is wanted. SuperSurfer then chooses that profile in the browser's own *Profiles* menu, and the browser does what it does when you choose it there yourself. The title of a window would be no help: Edge leaves the profile's name out of it for its first profile.
+
+**Permission.** Choosing an entry in another app's menu takes the Accessibility permission, the one Dock Click uses; macOS asks for it when a shortcut is made. Without it a shortcut still works, but every click opens a new window of the profile, and the menu entry carries a ⚠︎. What the app's signature does to this permission after an update is described under [Dock Click](#dock-click).
+
+**What stays different from Windows.**
+
+- A shortcut is an icon of its own. While the browser runs, the browser's icon is in the Dock as well, and the dot for a running app is under that one.
+- The click first starts the small app. On GitHub's macOS runners that took 0.1 to 0.2 s, and two to three seconds the first time a new shortcut was used. SuperSurfer then needed another 0.01 to 0.3 s, most of it waiting for the browser.
+- A shortcut remembers the folder the browser keeps the profile in, so renaming the profile does not break it. Its own name and badge stay as they were: remove it and make it again for new ones.
+- **Remove Shortcut** deletes the app. The Dock keeps a question mark in its place until you drag that out.
+
+**Signed-in profiles.** The *Profiles* menu does not always list a profile under its name. For a profile that is signed in to an account, Chrome shows the account's name, or both, as "Ada (Work)", and a name an organization gave the profile in place of the profile's own. SuperSurfer works out which of these to expect the way Chromium's source does, looks for the other forms after that, and then for an entry that has the profile's name in it as a word of its own. If no entry fits, or more than one, it opens a new window of the profile instead and writes the entries it saw to the system log:
+
+```bash
+log show --last 5m --predicate 'eventMessage CONTAINS "SuperSurfer"'
+```
+
+The same command shows it when a shortcut could not reach SuperSurfer at all, for instance because the app was moved away. The shortcut then opens a window of the profile by itself.
+
+**Which browsers.** Edge and Chrome. Their Beta and Canary builds and Chromium have the same menu and are offered as well, untried. Firefox is not offered: it runs every profile as an app of its own, which has its own Dock icon while it runs. Safari is not offered either: its profiles cannot be reached from outside.
+
+**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It runs in CI on macOS 15 and has passed on GitHub's macOS 26 runner. Not tested: profiles that are signed in to an account (the rule for their names follows Chromium's source and is checked against made-up data; what Edge does with a Microsoft account is not known), a browser in another language, the Beta and Canary builds, and macOS 27.
 
 ## Saved rules (`rules.json`)
 
@@ -253,6 +324,19 @@ dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --self-test   # check the Swift/
 bash packaging/macos/smoke-test.sh                            # self-test, then start the app and route a real link
 ```
 
+Dock Click has a test of its own, which clicks real Dock icons and checks what happens to the windows. It needs the Accessibility permission for the terminal it runs in, and the Mac to itself for three minutes:
+
+```bash
+bash packaging/macos/dock-click-test.sh
+SUPERSURFER_DOCK_CLICK=hide dist/SuperSurfer.app/Contents/MacOS/SuperSurfer --resident   # or minimize: try it without storing the choice; prints a line per Dock click, and one for each other window that gets a click
+```
+
+The Dock shortcuts have one too. It starts Edge and Chrome with profiles of its own, so quit both first, and it takes five minutes:
+
+```bash
+bash packaging/macos/dock-shortcut-test.sh
+```
+
 When replacing an installed copy, quit the running app first (menu → Quit SuperSurfer); the next link or `open -a SuperSurfer` starts the new one.
 
 To sign with a Developer ID instead of ad hoc (hardened runtime and timestamp, as notarization requires):
@@ -318,7 +402,7 @@ supersurfer doctor
 Bump the version in `Cargo.toml`, `Cargo.lock` and `packaging/macos/Info.plist`, merge to `main`, then publish in one of three ways. Each ends in the same CI run, which builds every platform and attaches the binaries:
 
 - **From the Actions page:** CI → Run workflow → branch `main`, tick *Publish a GitHub release*. This creates the tag `v<version>` and the release.
-- **With a tag:** `git tag v0.2.0 && git push origin v0.2.0`.
+- **With a tag:** `git tag v0.3.0 && git push origin v0.3.0`.
 - **From the Releases page:** create a release with a new tag `v<version>` on `main`. CI adds the binaries a few minutes later, and the notes if you left them empty.
 
 ## Architecture
@@ -347,7 +431,7 @@ URL event → SuperSurfer.app (Swift, stays loaded)
 
 ## Status
 
-v0.2.x is usable as a default browser on macOS, Windows, and Linux:
+v0.3.x is usable as a default browser on macOS, Windows, and Linux:
 
 - Rust core with QuickJS sandboxed config runtime
 - JavaScript config with JSDoc types
@@ -355,13 +439,15 @@ v0.2.x is usable as a default browser on macOS, Windows, and Linux:
 - Built-in URL cleaning with `route` / `direct` / `off` modes (safelink unwrapping, UTM stripping)
 - macOS `SuperSurfer.app` bundle + Launch Services / duti registration
 - macOS menu bar app that stays loaded: recent links, picker on a modifier key, launch at login
+- macOS Dock Click (optional): a click on the Dock icon of the app in front hides the app or minimizes its windows
+- macOS Dock shortcuts (optional): an icon in the Dock per Edge or Chrome profile that brings the profile's window to the front
 - Saved rules in `rules.json`, managed by the picker or `supersurfer rules`
 - Windows `supersurfer.exe` + registry browser registration
 - Linux `supersurfer` binary + `.desktop` / xdg-settings registration
 - macOS, Windows, and Linux browser discovery + launch
 - CLI: `init`, `doctor`, `test`, `rules`, `logs`
 
-**Not yet:** signed/notarized distribution, signed rules updates. Until the app is notarized, macOS refuses to open a downloaded copy — run `xattr -cr /Applications/SuperSurfer.app` once, or allow it under System Settings → Privacy & Security → Open Anyway. Without a Developer ID signature, macOS also forgets the permission to read browser profiles (macOS 27 and later) with every update.
+**Not yet:** signed/notarized distribution, signed rules updates. Until the app is notarized, macOS refuses to open a downloaded copy — run `xattr -cr /Applications/SuperSurfer.app` once, or allow it under System Settings → Privacy & Security → Open Anyway. Without a Developer ID signature, macOS also forgets two permissions with every update: reading browser profiles (macOS 27 and later) and Accessibility, which only [Dock Click](#dock-click) and [Dock Shortcuts](#dock-shortcuts) need.
 
 ## License
 

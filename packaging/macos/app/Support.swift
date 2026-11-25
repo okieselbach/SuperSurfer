@@ -1,3 +1,4 @@
+import ApplicationServices
 import Cocoa
 
 /// The app has a handful of strings, so English and German sit side by side
@@ -122,5 +123,37 @@ enum MenuItems {
         let icon = NSWorkspace.shared.icon(forFile: path)
         icon.size = NSSize(width: 16, height: 16)
         return icon
+    }
+}
+
+/// Questions to another app through Accessibility. Each one waits for that
+/// app's answer, so none of them belongs on the main thread.
+enum AX {
+    static func value(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+            return nil
+        }
+        return value
+    }
+
+    static func string(_ element: AXUIElement, _ attribute: String) -> String? {
+        return value(element, attribute) as? String
+    }
+
+    static func bool(_ element: AXUIElement, _ attribute: String) -> Bool? {
+        return value(element, attribute) as? Bool
+    }
+
+    static func url(_ element: AXUIElement, _ attribute: String) -> URL? {
+        let found = value(element, attribute)
+        if let url = found as? URL {
+            return url
+        }
+        return (found as? String).flatMap { URL(string: $0) }
+    }
+
+    static func elements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+        return (value(element, attribute) as? [AXUIElement]) ?? []
     }
 }

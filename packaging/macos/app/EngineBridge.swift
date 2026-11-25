@@ -74,6 +74,35 @@ struct BrowsersReply: Decodable {
     let profilesBlocked: [String]?
 }
 
+/// A browser profile that can have a shortcut in the Dock.
+struct ShortcutProfile: Decodable {
+    let name: String
+    /// The folder the browser keeps the profile in: what never changes.
+    let directory: String
+    /// What the browser may call the profile in its own profile menu, most
+    /// likely first.
+    let menuTitles: [String]
+    /// Arguments that make the browser open a window of this profile.
+    let launchArgs: [String]
+}
+
+struct ShortcutBrowser: Decodable {
+    let id: String
+    let name: String
+    /// "Edge" for "Microsoft Edge".
+    let shortName: String
+    let appPath: String
+    let bundleId: String?
+    let profiles: [ShortcutProfile]
+}
+
+struct ShortcutsReply: Decodable {
+    let ok: Bool
+    let error: String?
+    let browsers: [ShortcutBrowser]?
+    let profilesBlocked: [String]?
+}
+
 struct RuleInfo: Decodable {
     let domain: String
     let browser: String
@@ -148,6 +177,11 @@ final class EngineBridge {
 
     func browsers() -> BrowsersReply? {
         return call(["op": "browsers"], as: BrowsersReply.self)
+    }
+
+    /// Browsers whose profiles can have a shortcut in the Dock.
+    func shortcuts() -> ShortcutsReply? {
+        return call(["op": "shortcuts"], as: ShortcutsReply.self)
     }
 
     func rules() -> RulesReply? {

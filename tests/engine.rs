@@ -100,6 +100,13 @@ impl ProfileListTaken {
         ProfileListTaken { path, content }
     }
 
+    /// Other profiles than the two the sandbox plants.
+    fn replaced_with(local_state: &str) -> Self {
+        let taken = Self::remember();
+        fs::write(&taken.path, local_state).unwrap();
+        taken
+    }
+
     /// A directory where the file should be: it exists, and reading it
     /// fails. macOS 27 looks like this from the inside, where `stat` on
     /// another app's browser data succeeds and `open` is refused.
@@ -668,6 +675,74 @@ fn profiles_are_listed_and_turned_into_launch_arguments() {
         reply["launch"]["args"],
         json!(["--profile-directory=Default", "--incognito"])
     );
+}
+
+#[test]
+fn dock_shortcuts_are_offered_for_profiles_of_browsers_with_a_profile_menu() {
+    let (sandbox, _guard) = sandbox();
+    if !sandbox.browsers.iter().any(|id| id == "chrome") {
+        eprintln!("skipped: Google Chrome is not installed on this machine");
+        return;
+    }
+    // "Work" is signed in and was named by the user, so Chrome's menu shows
+    // the account with it. Two profiles may share a name; their folders tell
+    // them apart.
+    let _profiles = ProfileListTaken::replaced_with(
+        r#"{"profile":{"info_cache":{
+            "Default":{"name":"Personal"},
+            "Profile 1":{"name":"Work","is_using_default_name":false,"gaia_given_name":"Ada"},
+            "Profile 7":{"name":"personal"}
+        }}}"#,
+    );
+    let mut engine = engine_with_default("chrome");
+    let keys = |value: &Value| -> Vec<String> {
+        let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    };
+
+    let reply = call(&mut engine, json!({ "op": "shortcuts" }));
+    assert_eq!(keys(&reply), ["browsers", "error", "ok", "profilesBlocked"]);
+    assert_eq!(reply["ok"], true);
+    let browsers = reply["browsers"].as_array().unwrap();
+    let chrome = browsers
+        .iter()
+        .find(|browser| browser["id"] == "chrome")
+        .expect("Chrome is offered");
+    assert_eq!(
+        keys(chrome),
+        ["appPath", "bundleId", "id", "name", "profiles", "shortName"]
+    );
+    assert_eq!(chrome["name"], "Google Chrome");
+    assert_eq!(chrome["shortName"], "Chrome");
+    assert_eq!(
+        chrome["profiles"],
+        json!([
+            {
+                "name": "Personal",
+                "directory": "Default",
+                "menuTitles": ["Personal"],
+                "launchArgs": ["--profile-directory=Default"],
+            },
+            {
+                "name": "personal",
+                "directory": "Profile 7",
+                "menuTitles": ["personal"],
+                "launchArgs": ["--profile-directory=Profile 7"],
+            },
+            {
+                "name": "Work",
+                "directory": "Profile 1",
+                "menuTitles": ["Ada (Work)", "Work", "Ada"],
+                "launchArgs": ["--profile-directory=Profile 1"],
+            },
+        ])
+    );
+    // Firefox keeps each profile in a process of its own and Safari has no
+    // way in from outside: neither is offered.
+    assert!(browsers
+        .iter()
+        .all(|browser| browser["id"] != "firefox" && browser["id"] != "safari"));
 }
 
 #[test]

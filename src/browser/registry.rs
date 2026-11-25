@@ -24,6 +24,24 @@ pub struct BrowserProfile {
     pub name: String,
     pub directory: Option<String>,
     pub path: Option<String>,
+    /// What a Chromium browser may call this profile in its own profile
+    /// menu, most likely first. Empty for other browsers, and in a cache
+    /// file written before this was read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub menu_titles: Vec<String>,
+}
+
+impl BrowserProfile {
+    /// The titles to look for in the browser's profile menu. A list read
+    /// from a cache file written before the titles were kept has none; until
+    /// the next scan the profile's name is the best guess.
+    pub fn menu_titles_or_name(&self) -> Vec<String> {
+        if self.menu_titles.is_empty() {
+            vec![self.name.clone()]
+        } else {
+            self.menu_titles.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +320,24 @@ pub fn is_chromium_browser(id: &str) -> bool {
         .into_iter()
         .find(|b| b.id == id)
         .is_some_and(|b| b.profile_kind == ProfileKind::Chromium)
+}
+
+/// Browsers whose own profile menu can bring a profile's window to the
+/// front, which is what a Dock shortcut for a profile relies on. Tried with
+/// Edge and Chrome; their other channels and Chromium share that menu.
+pub fn has_profile_menu(id: &str) -> bool {
+    matches!(
+        id,
+        "chrome" | "chrome-canary" | "chromium" | "edge" | "edge-beta" | "edge-canary"
+    )
+}
+
+/// What a browser goes by for short: "Edge" for "Microsoft Edge".
+pub fn short_name(id: &str) -> Option<&'static str> {
+    known_browsers()
+        .into_iter()
+        .find(|b| b.id == id)
+        .map(|b| b.aliases.first().copied().unwrap_or(b.display_name))
 }
 
 pub fn is_gecko_browser(id: &str) -> bool {
@@ -1426,6 +1462,7 @@ fn discover_gecko_profiles(ini_path: &Path) -> Result<Vec<BrowserProfile>> {
                     name: name.clone(),
                     directory: Some(name),
                     path: Some(path),
+                    menu_titles: Vec::new(),
                 });
             }
         }
@@ -1435,6 +1472,7 @@ fn discover_gecko_profiles(ini_path: &Path) -> Result<Vec<BrowserProfile>> {
             name: name.clone(),
             directory: Some(name),
             path: Some(path),
+            menu_titles: Vec::new(),
         });
     }
     Ok(profiles)
@@ -1453,20 +1491,124 @@ fn discover_chromium_profiles(support_dir: &Path) -> Result<Vec<BrowserProfile>>
         .pointer("/profile/info_cache")
         .and_then(|v| v.as_object())
     {
-        for (dir, info) in info_cache {
-            let name = info
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(dir)
-                .to_string();
+        let names: Vec<(&String, ChromiumNames)> = info_cache
+            .iter()
+            .map(|(dir, info)| (dir, ChromiumNames::read(dir, info)))
+            .collect();
+        for (index, (dir, own)) in names.iter().enumerate() {
+            let others = names
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .map(|(_, (_, names))| names);
             profiles.push(BrowserProfile {
-                name,
-                directory: Some(dir.clone()),
+                name: own.name.clone(),
+                directory: Some((*dir).clone()),
                 path: None,
+                menu_titles: chromium_menu_titles(own, others),
             });
         }
     }
     Ok(profiles)
+}
+
+/// What Chromium keeps about the names of a profile in `Local State`.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+struct ChromiumNames {
+    /// The profile's own name.
+    name: String,
+    /// A name an organization gave the profile. Where there is one, the
+    /// browser shows it in place of `name`.
+    label: String,
+    /// The name of the account the profile is signed in to, the given name
+    /// where there is one. Empty for a profile that is not signed in.
+    account: String,
+    /// `name` is one the browser made up ("Person 1").
+    made_up_name: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+impl ChromiumNames {
+    fn read(directory: &str, info: &serde_json::Value) -> Self {
+        let text = |key: &str| {
+            info.get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let account = ["gaia_given_name", "gaia_name", "oidc_identity_name"]
+            .into_iter()
+            .map(text)
+            .find(|name| !name.is_empty())
+            .unwrap_or_default();
+        ChromiumNames {
+            name: info
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(directory)
+                .to_string(),
+            label: text("enterprise_label"),
+            account,
+            made_up_name: info
+                .get("is_using_default_name")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        }
+    }
+
+    /// The name the browser shows for the profile itself.
+    fn local(&self) -> &str {
+        if self.label.is_empty() {
+            self.name.trim()
+        } else {
+            &self.label
+        }
+    }
+}
+
+/// What a Chromium browser may call a profile in its own profile menu, most
+/// likely first.
+///
+/// The menu does not always show the profile's name. This follows
+/// `ProfileAttributesEntry::GetName` in Chromium's source: a profile that is
+/// not signed in goes by its own name. One that is signed in goes by the name
+/// of its account while its own name is one the browser made up ("Person 1"),
+/// and by both, as "Account (Profile)", once it was given a name, or when
+/// another profile already goes by that account name alone.
+///
+/// The first entry is what that rule yields. The others are the remaining
+/// forms, for a browser that follows another rule.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn chromium_menu_titles<'a>(
+    own: &ChromiumNames,
+    mut others: impl Iterator<Item = &'a ChromiumNames>,
+) -> Vec<String> {
+    let local = own.local();
+    let account = own.account.as_str();
+    let both = format!("{account} ({local})");
+    let account_taken = !account.is_empty()
+        && others.any(|other| {
+            other.account.eq_ignore_ascii_case(account)
+                && (other.made_up_name || other.local().eq_ignore_ascii_case(&other.account))
+        });
+    let expected: Vec<&str> = if account.is_empty() {
+        vec![local]
+    } else if account.eq_ignore_ascii_case(local) {
+        vec![account, local]
+    } else if !own.made_up_name || !own.label.is_empty() || account_taken {
+        vec![&both, local, account]
+    } else {
+        vec![account, &both, local]
+    };
+    let mut titles: Vec<String> = Vec::new();
+    // The profile's own name last, for when a label stands in front of it.
+    for candidate in expected.into_iter().chain([own.name.trim()]) {
+        if !candidate.is_empty() && !titles.iter().any(|title| title == candidate) {
+            titles.push(candidate.to_string());
+        }
+    }
+    titles
 }
 
 #[cfg(test)]
@@ -1485,6 +1627,7 @@ mod tests {
                     name: name.to_string(),
                     directory: Some(directory.to_string()),
                     path: None,
+                    menu_titles: Vec::new(),
                 })
                 .collect(),
         }
@@ -1686,6 +1829,147 @@ mod tests {
 
         let (profiles, failure) = profiles_if_readable(&chrome, Ok(vec![]));
         assert!(profiles.is_empty() && failure.is_none());
+    }
+
+    fn names(name: &str, account: &str, made_up_name: bool) -> ChromiumNames {
+        ChromiumNames {
+            name: name.to_string(),
+            label: String::new(),
+            account: account.to_string(),
+            made_up_name,
+        }
+    }
+
+    #[test]
+    fn menu_titles_follow_what_chromium_shows_for_a_profile() {
+        let titles = |own: &ChromiumNames, others: &[ChromiumNames]| {
+            chromium_menu_titles(own, others.iter())
+        };
+        // Not signed in: the profile's name.
+        assert_eq!(titles(&names("Work", "", false), &[]), ["Work"]);
+        // Signed in under a name the browser made up: the account's name.
+        assert_eq!(
+            titles(&names("Person 1", "Ada", true), &[]),
+            ["Ada", "Ada (Person 1)", "Person 1"]
+        );
+        // Signed in and named by the user: both.
+        assert_eq!(
+            titles(&names("Work", "Ada", false), &[]),
+            ["Ada (Work)", "Work", "Ada"]
+        );
+        // Never "Ada (ada)".
+        assert_eq!(titles(&names("ada", "Ada", false), &[]), ["Ada", "ada"]);
+
+        // A second profile of the same account that goes by the account's
+        // name alone: both then show their own names with it.
+        assert_eq!(
+            titles(
+                &names("Person 2", "Ada", true),
+                &[names("Person 1", "ada", true)]
+            ),
+            ["Ada (Person 2)", "Person 2", "Ada"]
+        );
+        assert_eq!(
+            titles(
+                &names("Person 2", "Ada", true),
+                &[names("Ada", "Ada", false)]
+            ),
+            ["Ada (Person 2)", "Person 2", "Ada"]
+        );
+        // A second profile of the account that shows its own name anyway
+        // leaves the account's name to this one.
+        assert_eq!(
+            titles(
+                &names("Person 2", "Ada", true),
+                &[names("Work", "Ada", false), names("Dev", "", false)]
+            ),
+            ["Ada", "Ada (Person 2)", "Person 2"]
+        );
+
+        // A name given by an organization stands in for the profile's own
+        // and is always shown.
+        let mut managed = names("Person 3", "Ada", true);
+        managed.label = "Contoso".to_string();
+        assert_eq!(
+            titles(&managed, &[]),
+            ["Ada (Contoso)", "Contoso", "Ada", "Person 3"]
+        );
+        managed.account = String::new();
+        assert_eq!(titles(&managed, &[]), ["Contoso", "Person 3"]);
+    }
+
+    #[test]
+    fn menu_titles_are_read_with_the_profiles() {
+        let dir = std::env::temp_dir().join(format!("supersurfer-titles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Local State"),
+            r#"{"profile":{"info_cache":{
+                "Default":{"name":"Person 1","is_using_default_name":true,
+                           "gaia_name":"Ada Lovelace","gaia_given_name":"Ada"},
+                "Profile 1":{"name":"Work","is_using_default_name":false,
+                             "gaia_name":"Grace Hopper","gaia_given_name":""},
+                "Profile 2":{"name":"Dev"},
+                "Profile 3":{"name":"Person 4","is_using_default_name":true,
+                             "gaia_name":"ADA","gaia_given_name":"ada"},
+                "Profile 4":{"name":"Person 5","is_using_default_name":true,
+                             "oidc_identity_name":"Linus","enterprise_label":"Contoso"}
+            }}}"#,
+        )
+        .unwrap();
+        let mut profiles = discover_chromium_profiles(&dir).unwrap();
+        profiles.sort_by(|a, b| a.directory.cmp(&b.directory));
+        let titles: Vec<(&str, &[String])> = profiles
+            .iter()
+            .map(|p| (p.directory.as_deref().unwrap(), p.menu_titles.as_slice()))
+            .collect();
+        // "Default" and "Profile 3" share an account name, so both show
+        // their own name with it.
+        assert_eq!(titles[0].0, "Default");
+        assert_eq!(titles[0].1, ["Ada (Person 1)", "Person 1", "Ada"]);
+        // The full name where the account has no given name.
+        assert_eq!(titles[1].0, "Profile 1");
+        assert_eq!(titles[1].1, ["Grace Hopper (Work)", "Work", "Grace Hopper"]);
+        assert_eq!(titles[2].0, "Profile 2");
+        assert_eq!(titles[2].1, ["Dev"]);
+        assert_eq!(titles[3].0, "Profile 3");
+        assert_eq!(titles[3].1, ["ada (Person 4)", "Person 4", "ada"]);
+        // Signed in through an organization, which also named the profile.
+        assert_eq!(titles[4].0, "Profile 4");
+        assert_eq!(
+            titles[4].1,
+            ["Linus (Contoso)", "Contoso", "Linus", "Person 5"]
+        );
+        // The profile's own name stays what the rest of SuperSurfer goes by.
+        assert_eq!(profiles[4].name, "Person 5");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // A profile from a cache file that knew no titles yet.
+        let cached: BrowserProfile =
+            serde_json::from_str(r#"{"name":"Work","directory":"Profile 1","path":null}"#).unwrap();
+        assert!(cached.menu_titles.is_empty());
+        assert_eq!(cached.menu_titles_or_name(), ["Work"]);
+        // And nothing is written for a profile without titles.
+        assert_eq!(
+            serde_json::to_string(&cached).unwrap(),
+            r#"{"name":"Work","directory":"Profile 1","path":null}"#
+        );
+    }
+
+    #[test]
+    fn only_browsers_with_a_profile_menu_get_dock_shortcuts() {
+        assert!(has_profile_menu("edge"));
+        assert!(has_profile_menu("chrome"));
+        assert!(has_profile_menu("chrome-canary"));
+        assert!(!has_profile_menu("vivaldi"));
+        assert!(!has_profile_menu("firefox"));
+        assert!(!has_profile_menu("safari"));
+        assert_eq!(short_name("edge"), Some("Edge"));
+        assert_eq!(short_name("chrome"), Some("Chrome"));
+        assert_eq!(short_name("edge-beta"), Some("Edge Beta"));
+        assert_eq!(short_name("chromium"), Some("Chromium"));
+        assert_eq!(short_name("no-such-browser"), None);
     }
 
     /// A directory where the file should be: present, but not readable as a

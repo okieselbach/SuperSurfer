@@ -260,6 +260,7 @@ mod tests {
                     name: "Work".to_string(),
                     directory: Some("Profile 1".to_string()),
                     path: None,
+                    menu_titles: Vec::new(),
                 }],
             },
         );

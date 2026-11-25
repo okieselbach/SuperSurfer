@@ -237,6 +237,19 @@ fn spawn_gui_process(mut cmd: Command) -> Result<()> {
     Ok(())
 }
 
+/// Arguments that make a browser open a window of the profile kept in
+/// `directory`, without being given an address. `None` for a browser that
+/// has no such argument.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub fn profile_window_args(browser_id: &str, directory: &str) -> Option<Vec<String>> {
+    chromium_profile_arg(browser_id, Some(directory)).map(|arg| vec![arg])
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+pub fn profile_window_args(_browser_id: &str, _directory: &str) -> Option<Vec<String>> {
+    None
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn chromium_profile_arg(browser_id: &str, profile: Option<&str>) -> Option<String> {
     if !is_chromium_browser(browser_id) {
