@@ -17,6 +17,8 @@ import Cocoa
 //
 //   dock-click-test shortcuts <edge|chrome> <scratch HOME> <SuperSurfer.app>
 //                             <SuperSurfer's trace> [dock] [start]
+//   dock-click-test unanswered <scratch HOME> <SuperSurfer.app>
+//                              <SuperSurfer's trace>
 
 func say(_ text: String) {
     print(text)
@@ -983,42 +985,6 @@ struct TestBrowser {
     let bundleID: String
     /// Where it keeps its profiles, below Library/Application Support.
     let dataFolder: String
-    /// Whether the test goes on to choose one of this browser's profiles
-    /// in the picker, which has SuperSurfer start the browser a second
-    /// time. Only for the browser that dock-shortcut-test.sh runs last,
-    /// and it is the last thing the test asks SuperSurfer for.
-    ///
-    /// The reason is in what a runner's browsers do. Launch Services hands
-    /// on what one app asks it to open one request at a time, and each
-    /// waits until the browser has answered, which is when it has finished
-    /// starting. On GitHub's macOS 15 runner, where no browser has ever
-    /// been run, a browser that SuperSurfer starts does not get that far:
-    /// Chrome was there for 40 s without a window (runs 66 and 67), and
-    /// Edge for 40 s as well (run 65), unless the file that says its first
-    /// run is behind it was put there before (run 67). Until the answer
-    /// comes, nothing SuperSurfer asks macOS for after it happens.
-    ///
-    /// What has been seen of the answer there:
-    ///
-    /// - It came, as "started", when the browser got through its start:
-    ///   Edge in runs 67 and 69 and in some before.
-    /// - It came five to six seconds after the start, as "could not be
-    ///   launched", when the browser was gone again by then: Edge in runs
-    ///   63, 64, 66 and 68, Chrome in runs 68 and 69.
-    /// - It did not come while a browser was there without getting through
-    ///   its start: Edge for 40 s in run 65, Chrome for 40 s in runs 66
-    ///   and 67.
-    /// - It did not come for Edge's second start in runs 63 and 64 either,
-    ///   which was quit seven seconds after the start. Two minutes later
-    ///   there was still no answer, and Chrome, which SuperSurfer was
-    ///   asked for in between, never came.
-    ///
-    /// So a browser that SuperSurfer started is asked to quit two seconds
-    /// after it was seen, which is three seconds after its start. That is
-    /// what the test has always done, and both browsers went at once then.
-    /// Asked half a second after it was seen, in run 69, Edge took more
-    /// than ten seconds to go.
-    let chosenInPicker: Bool
 }
 
 let testBrowsers = [
@@ -1029,8 +995,7 @@ let testBrowsers = [
         appPath: "/Applications/Microsoft Edge.app",
         binary: "Microsoft Edge",
         bundleID: "com.microsoft.edgemac",
-        dataFolder: "Microsoft Edge",
-        chosenInPicker: false
+        dataFolder: "Microsoft Edge"
     ),
     TestBrowser(
         id: "chrome",
@@ -1039,8 +1004,7 @@ let testBrowsers = [
         appPath: "/Applications/Google Chrome.app",
         binary: "Google Chrome",
         bundleID: "com.google.Chrome",
-        dataFolder: "Google/Chrome",
-        chosenInPicker: true
+        dataFolder: "Google/Chrome"
     ),
 ]
 
@@ -1083,6 +1047,8 @@ func outputOf(_ tool: String, _ arguments: [String]) -> String {
 /// entry with a submenu opens it and keeps the menu up, so the next step
 /// finds its entries. False, with the menu closed again, if a step finds
 /// nothing to click.
+var menuAtLastMiss: [String] = []
+
 func clickDownMenu(_ steps: [([AXUIElement]) -> AXUIElement?]) -> Bool {
     guard let item = statusItem(), let icon = middle(of: item) else {
         stop("SuperSurfer has no icon in the menu bar")
@@ -1103,6 +1069,8 @@ func clickDownMenu(_ steps: [([AXUIElement]) -> AXUIElement?]) -> Bool {
             return spot != nil
         }
         guard found, let entry = target, let point = spot else {
+            // What the step looked through, for whoever reports the miss.
+            menuAtLastMiss = entries().map { text($0, kAXTitleAttribute) ?? "" }
             for _ in 1...3 {
                 pressEscape()
             }
@@ -1364,7 +1332,7 @@ func openPicker(for link: String, showing mark: String) -> [AXUIElement] {
     pause(0.3)
     let entry = entryTitled(["Choose Browser for Copied Link…", "Browser für kopierten Link wählen …"])
     guard clickDownMenu([entry]) else {
-        stop("SuperSurfer's menu has no entry that opens the picker")
+        stop("SuperSurfer's menu has no entry that opens the picker; it has \(menuAtLastMiss)")
     }
     var entries: [AXUIElement] = []
     let up = waitUntil(10) {
@@ -1466,19 +1434,6 @@ func testShortcuts(
         for line in superSurferThreads() {
             say("        \(line)")
         }
-    }
-    /// Waits until macOS has answered SuperSurfer a start it asked for,
-    /// once the browser has been quit again. `before` is what
-    /// `answeredStarts` said before the start was asked for. Until that
-    /// answer is there SuperSurfer can start nothing else; see
-    /// `TestBrowser.chosenInPicker`.
-    func awaitAnswer(since before: Int) {
-        let began = Date()
-        guard waitUntil(40, { answeredStarts() > before }) else {
-            whyNoStart()
-            stop("macOS has not answered the start of \(browser.name) 40 s after \(browser.name) was quit")
-        }
-        say(String(format: "      macOS answered that start %.1f s after the browser was quit", Date().timeIntervalSince(began)))
     }
 
     // Three profiles, each with one window that shows a page of its own. The
@@ -1592,99 +1547,6 @@ func testShortcuts(
             return given
         }
         return chosenNames[found] ?? names[found] ?? given
-    }
-
-    /// TEMPORARY. How long macOS takes over a link that SuperSurfer hands
-    /// to a browser that is running: one link at a time, and three in a
-    /// row. The browser runs the way a person has it, with the profiles in
-    /// its own folder, so that the instance SuperSurfer starts for a link
-    /// finds it and passes the link on.
-    func handoffTrial() {
-        let config = home + "/Library/Application Support/SuperSurfer/config.js"
-        let configBefore = try? String(contentsOfFile: config, encoding: .utf8)
-        let own = "export default {\n  defaultBrowser: \"\(browser.id):\(second)\",\n  handlers: [],\n};\n"
-        try? own.write(toFile: config, atomically: true, encoding: .utf8)
-        defer {
-            if let text = configBefore {
-                try? text.write(toFile: config, atomically: true, encoding: .utf8)
-            }
-        }
-        func page(_ name: String) -> String {
-            let file = pages + "/\(name).html"
-            try? "<!doctype html><title>\(name)</title><p>\(name)</p>".write(toFile: file, atomically: true, encoding: .utf8)
-            return file
-        }
-        func linkLines() -> [String] {
-            let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
-            return text.components(separatedBy: "\n").filter {
-                $0.contains("SuperSurfer: routed ") || $0.contains("accepted it after") || $0.contains("could not open")
-            }
-        }
-        // The flags keep the browser from what holds it up on a runner.
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = [
-            "--profile-directory=Profile 1",
-            "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--use-mock-keychain",
-            URL(fileURLWithPath: page("sst-h0")).absoluteString,
-        ]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            say("      TEMPORARY \(browser.shortName) did not start: \(error.localizedDescription)")
-            return
-        }
-        let up = waitUntil(40) { running().map { window(of: $0, showing: "sst-h0") != nil } ?? false }
-        guard up, let live = running() else {
-            say("      TEMPORARY \(browser.shortName) with its own profiles shows no window: \(whatIsThere())")
-            quit()
-            return
-        }
-        say("      TEMPORARY \(browser.shortName) is running with its own profiles")
-        pause(2)
-        var seen = linkLines().count
-        for name in ["sst-h1", "sst-h2", "sst-h3"] {
-            let file = page(name)
-            let began = Date()
-            run("/usr/bin/open", ["-g", "-a", superSurfer, file])
-            let shown = waitUntil(20) { window(of: live, showing: name) != nil }
-            say(String(
-                format: "      TEMPORARY one link, %@: %@ %.2f s after it was sent",
-                name, shown ? "its page is there" : "NO page", Date().timeIntervalSince(began)
-            ))
-            _ = waitUntil(12) { linkLines().count >= seen + 2 }
-            for line in linkLines().dropFirst(seen) {
-                say("        \(line)")
-            }
-            seen = linkLines().count
-            pause(1)
-        }
-        let burst = ["sst-b1", "sst-b2", "sst-b3"]
-        let files = burst.map(page)
-        let start = Date()
-        for file in files {
-            run("/usr/bin/open", ["-g", "-a", superSurfer, file])
-            usleep(300_000)
-        }
-        var firstSeen: [String: TimeInterval] = [:]
-        while Date().timeIntervalSince(start) < 25, firstSeen.count < burst.count {
-            let titles = axWindows(live).map { text($0, kAXTitleAttribute) ?? "" }
-            for name in burst where firstSeen[name] == nil && titles.contains(where: { $0.contains(name) }) {
-                firstSeen[name] = Date().timeIntervalSince(start)
-            }
-            usleep(50_000)
-        }
-        for name in burst {
-            let when = firstSeen[name].map { String(format: "its page was there %.2f s after the first was sent", $0) }
-            say("      TEMPORARY three in a row, \(name): \(when ?? "NO page in 25 s")")
-        }
-        _ = waitUntil(15) { linkLines().count >= seen + 6 }
-        for line in linkLines().dropFirst(seen) {
-            say("        \(line)")
-        }
-        quit()
     }
 
     say("-- a shortcut is made in SuperSurfer's menu")
@@ -2028,8 +1890,16 @@ func testShortcuts(
         // SuperSurfer starts the browser the way it does for a link, so with
         // the profiles the browser really has on this Mac, not with the ones
         // made above. What can be checked is what it was started with.
+        //
+        // On a runner, where no browser has been run before, a browser that
+        // is started this way does not always get through its start, and
+        // macOS then leaves the start unanswered: Chrome was there for 40 s
+        // without a window and without an answer (runs 66 and 67 of the
+        // CI), Edge for 40 s in run 65. SuperSurfer does not let what it is
+        // asked for next wait for such an answer, which `testUnanswered`
+        // checks by itself. So nothing here depends on when a browser is
+        // quit.
         say("-- a browser that is not running is started with the profile")
-        let answeredSoFar = answeredStarts()
         use(second)
         var arguments = ""
         let started = waitUntil(40) {
@@ -2044,19 +1914,12 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
-        // Two seconds and no other time: see `TestBrowser.chosenInPicker`.
         pause(2)
         quit()
-        // TEMPORARY: for both browsers.
-        awaitAnswer(since: answeredSoFar)
-        handoffTrial()
-        guard browser.chosenInPicker else {
-            return
-        }
 
         // The entry says "Work". What SuperSurfer hands on has to be the
-        // profile behind it, by the name the browser has for it. That takes
-        // a second start, and macOS has to have answered the first.
+        // profile behind it, by the name the browser has for it. That is a
+        // second start of the browser.
         say("-- a profile chosen in the picker under its shortcut's name is the one that opens")
         let page = "sst-second.html"
         let entries = openPicker(for: URL(fileURLWithPath: pages + "/" + page).absoluteString, showing: page)
@@ -2093,10 +1956,134 @@ func testShortcuts(
             stop("Recent Links has no entry that ends in \(browser.name) (Work): \(recent)")
         }
         say("ok    and Recent Links has it as \(browser.name) (Work)")
-        // Nothing is asked of SuperSurfer after this: on a runner this
-        // start is not answered while the browser is there.
         quit()
     }
+}
+
+// MARK: - A start that macOS does not answer
+
+/// What SuperSurfer is asked for next must not wait for a start that macOS
+/// does not answer.
+///
+/// Launch Services hands on what one app asks it to open one request at a
+/// time, and each waits until macOS can say how the start went. Run 64 of
+/// the CI showed SuperSurfer in that state with a browser: one thread on
+/// Launch Services' queue for opening, in a call that waits for the answer,
+/// and nothing SuperSurfer asked for after that came.
+///
+/// The app made here never gets through its start: its program is a script
+/// that sleeps. SuperSurfer is asked to start it the way it starts a
+/// browser that is not running, and then for a link that goes to Safari.
+func testUnanswered(home: String, superSurfer: String, trace: String) {
+    let files = FileManager.default
+    // A time nothing else sleeps for, to find the process by.
+    let sleeping = "/bin/sleep 317"
+    let stuck = home + "/Stuck.app"
+    let pages = home + "/pages"
+    let page = pages + "/sst-after.html"
+    do {
+        try files.createDirectory(atPath: stuck + "/Contents/MacOS", withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleExecutable": "stuck",
+            "CFBundleIdentifier": "dev.supersurfer.test.stuck",
+            "CFBundleName": "Stuck",
+            "CFBundlePackageType": "APPL",
+            "CFBundleInfoDictionaryVersion": "6.0",
+            "CFBundleShortVersionString": "1",
+            "CFBundleVersion": "1",
+            "LSUIElement": true,
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: URL(fileURLWithPath: stuck + "/Contents/Info.plist"))
+        let program = stuck + "/Contents/MacOS/stuck"
+        try Data("#!/bin/sh\nexec \(sleeping)\n".utf8).write(to: URL(fileURLWithPath: program))
+        try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: program)
+
+        // A shortcut for it. SuperSurfer knows no browser called
+        // "sst-stuck", so it goes by what the shortcut has noted.
+        let shortcut = home + "/Applications/SuperSurfer Shortcuts/Stuck Test.app"
+        try files.createDirectory(atPath: shortcut + "/Contents", withIntermediateDirectories: true)
+        let noted: [String: Any] = [
+            "CFBundleName": "Stuck Test",
+            "SuperSurferBrowser": "sst-stuck",
+            "SuperSurferProfileDirectory": "Default",
+            "SuperSurferProfileName": "Test",
+            "SuperSurferBrowserPath": stuck,
+            "SuperSurferLaunchArguments": ["--sst"],
+        ]
+        try PropertyListSerialization.data(fromPropertyList: noted, format: .xml, options: 0)
+            .write(to: URL(fileURLWithPath: shortcut + "/Contents/Info.plist"))
+
+        try files.createDirectory(atPath: pages, withIntermediateDirectories: true)
+        try "<!doctype html><title>sst-after</title><p>sst-after</p>".write(toFile: page, atomically: true, encoding: .utf8)
+    } catch {
+        stop("what the test needs could not be written: \(error.localizedDescription)")
+    }
+
+    func sleepers() -> [String] {
+        return outputOf("/bin/ps", ["-axww", "-o", "pid=,etime=,args="])
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasSuffix(sleeping) }
+    }
+    func traced(_ text: String) -> Bool {
+        return ((try? String(contentsOfFile: trace, encoding: .utf8)) ?? "").contains(text)
+    }
+    func safari() -> NSRunningApplication? {
+        return NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari")
+            .first { !$0.isTerminated }
+    }
+    let safariWasRunning = safari() != nil
+    /// Leaves the Mac without the sleeping app, and without Safari if the
+    /// test was what started it.
+    func tidyUp() {
+        for line in sleepers() {
+            if let pid = line.split(separator: " ").first.flatMap({ pid_t($0) }) {
+                kill(pid, SIGKILL)
+            }
+        }
+        if !safariWasRunning {
+            safari()?.terminate()
+        }
+    }
+    func giveUp(_ why: String) -> Never {
+        say("      SuperSurfer's threads:")
+        for line in superSurferThreads() {
+            say("        \(line)")
+        }
+        tidyUp()
+        stop(why)
+    }
+
+    say("-- an app that does not get through its start is started")
+    run("/usr/bin/open", ["-g", "-a", superSurfer, "supersurfer://profile/sst-stuck/Default"])
+    guard waitUntil(20, { !sleepers().isEmpty }) else {
+        giveUp("SuperSurfer did not start the app")
+    }
+    say("ok    it is there: \(sleepers())")
+    // More than the second SuperSurfer waits for an answer.
+    pause(3)
+    if traced("Stuck Test: the browser was not running and was started with the profile") {
+        // Then this test does not test what it is for any more.
+        giveUp("macOS has answered the start of an app that never got through it")
+    }
+    say("ok    three seconds later macOS has not answered that start")
+
+    say("-- a link for another browser opens all the same")
+    let began = Date()
+    run("/usr/bin/open", ["-g", "-a", superSurfer, page])
+    let shown = waitUntil(40) {
+        safari().map { window(of: $0, showing: "sst-after") != nil } ?? false
+    }
+    guard shown else {
+        giveUp("Safari does not show the page 40 s after SuperSurfer was given the link")
+    }
+    say(String(format: "ok    Safari shows it %.1f s after SuperSurfer was given the link", Date().timeIntervalSince(began)))
+    guard traced("Safari.app is asked for through /usr/bin/open"), traced("macOS has not answered a start for") else {
+        giveUp("SuperSurfer's trace does not say that the link went through /usr/bin/open")
+    }
+    say("ok    and SuperSurfer says that it went through /usr/bin/open")
+    tidyUp()
 }
 
 switch CommandLine.arguments.dropFirst().first {
@@ -2114,6 +2101,13 @@ case "shortcuts":
         onDock: arguments.dropFirst(4).contains("dock"),
         startToo: arguments.dropFirst(4).contains("start")
     )
+case "unanswered":
+    let arguments = Array(CommandLine.arguments.dropFirst(2))
+    guard arguments.count == 3 else {
+        say("usage: dock-click-test unanswered <scratch HOME> <SuperSurfer.app> <trace>")
+        exit(2)
+    }
+    testUnanswered(home: arguments[0], superSurfer: arguments[1], trace: arguments[2])
 case "preflight":
     preflight()
 case "control":

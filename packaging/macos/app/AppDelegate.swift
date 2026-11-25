@@ -180,7 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if status?.freshBootstrap == true,
                    let landing = status?.landingUrl,
                    let manual = URL(string: landing) {
-                    NSWorkspace.shared.open(manual)
+                    Launcher.show(manual)
                 }
             }
         }

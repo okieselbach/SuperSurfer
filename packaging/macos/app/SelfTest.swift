@@ -70,6 +70,7 @@ enum SelfTest {
         check("reload decodes", reloaded?.ok == true && reloaded?.freshBootstrap == false)
 
         check("URL with characters old macOS rejects", Launcher.makeURL("https://example.com/a b|c?q={x}") != nil)
+        Launcher.selfTest(check)
 
         // The app's own icon, as the build packed it. Without one macOS
         // shows the picture it has for apps that bring none.

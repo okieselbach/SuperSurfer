@@ -108,7 +108,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if let configPath = status?.configPath {
             let config = URL(fileURLWithPath: configPath)
             menu.addItem(ActionMenuItem(tr("Edit config.js", "config.js bearbeiten")) {
-                NSWorkspace.shared.open(config)
+                Launcher.show(config)
             })
             menu.addItem(ActionMenuItem(tr("Show Config Folder", "Konfigurationsordner zeigen")) {
                 NSWorkspace.shared.activateFileViewerSelecting([config])
@@ -116,7 +116,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
         if let logPath = status?.logPath, FileManager.default.fileExists(atPath: logPath) {
             menu.addItem(ActionMenuItem(tr("Show Decision Log", "Entscheidungsprotokoll zeigen")) {
-                NSWorkspace.shared.open(URL(fileURLWithPath: logPath))
+                Launcher.show(URL(fileURLWithPath: logPath))
             })
         }
         menu.addItem(ActionMenuItem(tr("Reload Configuration", "Konfiguration neu laden")) {
@@ -241,7 +241,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if let path = reply?.path, FileManager.default.fileExists(atPath: path) {
             entries.append(.separator())
             entries.append(ActionMenuItem(tr("Edit rules.json", "rules.json bearbeiten")) {
-                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                Launcher.show(URL(fileURLWithPath: path))
             })
         }
 
