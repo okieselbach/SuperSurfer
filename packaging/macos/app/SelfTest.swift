@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// `SuperSurfer --self-test`: checks, on a real Mac, that this binary and the
@@ -69,6 +70,18 @@ enum SelfTest {
         check("reload decodes", reloaded?.ok == true && reloaded?.freshBootstrap == false)
 
         check("URL with characters old macOS rejects", Launcher.makeURL("https://example.com/a b|c?q={x}") != nil)
+
+        // The app's own icon, as the build packed it. Without one macOS
+        // shows the picture it has for apps that bring none.
+        let iconName = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String
+        let iconSizes = iconName
+            .flatMap { Bundle.main.url(forResource: $0, withExtension: "icns") }
+            .flatMap { NSImage(contentsOf: $0) }?
+            .representations.map { $0.pixelsWide } ?? []
+        check(
+            "the app has an icon of its own, from 16 to 1024 pixels",
+            iconSizes.contains(16) && iconSizes.contains(1024)
+        )
 
         DockClickController.selfTest(check)
         ProfileShortcuts.selfTest(check)

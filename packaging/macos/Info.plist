@@ -8,6 +8,8 @@
 	<string>SuperSurfer</string>
 	<key>CFBundleExecutable</key>
 	<string>SuperSurfer</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>dev.supersurfer.app</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -17,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.1</string>
+	<string>0.3.2</string>
 	<key>CFBundleVersion</key>
-	<string>0.3.1</string>
+	<string>0.3.2</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
