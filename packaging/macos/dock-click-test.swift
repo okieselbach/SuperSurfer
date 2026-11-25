@@ -1232,6 +1232,36 @@ func chooseInDockShortcuts(_ steps: [([AXUIElement]) -> AXUIElement?], what: Str
     stop("SuperSurfer's menu has no \(what) under Dock Shortcuts")
 }
 
+// MARK: - A browser that does not come
+
+/// The processes of an app's own program, its helpers left out, as `ps`
+/// lists them: number, how long it has been running, and what it was
+/// started with.
+func mainProcesses(of binary: String) -> [String] {
+    return outputOf("/bin/ps", ["-axww", "-o", "pid=,etime=,args="])
+        .components(separatedBy: "\n")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { $0.contains("/Contents/MacOS/\(binary)") && !$0.contains("--type=") && !$0.contains("Helper") }
+}
+
+/// Where SuperSurfer's threads are, cut down to the lines that name a
+/// thread or have to do with starting an app. For a start that SuperSurfer
+/// asked macOS for and that did not come.
+func superSurferThreads() -> [String] {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.supersurfer.app").first else {
+        return ["SuperSurfer is not running"]
+    }
+    let file = NSTemporaryDirectory() + "supersurfer-sample-\(UUID().uuidString).txt"
+    _ = outputOf("/usr/bin/sample", ["\(app.processIdentifier)", "1", "-file", file])
+    defer { try? FileManager.default.removeItem(atPath: file) }
+    let report = (try? String(contentsOfFile: file, encoding: .utf8)) ?? ""
+    let telling = ["Thread_", "LSOpen", "_LS", "NSWorkspace", "LaunchServices", "xpc_connection_send", "openApplication"]
+    let lines = report.components(separatedBy: "\n")
+        .filter { line in telling.contains { line.contains($0) } }
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+    return lines.isEmpty ? ["no sample could be taken"] : Array(lines.prefix(70))
+}
+
 // MARK: - The picker
 
 /// What is at a point of the screen, if it is SuperSurfer's.
@@ -1370,6 +1400,32 @@ func testShortcuts(
             _ = waitUntil(10) { running() == nil }
         }
         pause(1)
+        // What macOS lists as apps is not all there can be: a browser that
+        // was asked to quit while it was still starting may be in neither
+        // state. Whatever is still there three seconds on is put down.
+        if !waitUntil(3, { mainProcesses(of: browser.binary).isEmpty }) {
+            say("      after it was quit, \(browser.name) still has: \(mainProcesses(of: browser.binary))")
+        }
+    }
+    /// How many starts of a browser macOS has answered SuperSurfer, going
+    /// by its trace: for a link, and for a shortcut.
+    func answeredStarts() -> Int {
+        let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n")
+            .filter { $0.contains("accepted it after") || $0.contains("was started with the profile") }
+            .count
+    }
+    /// What there is to see when a start that SuperSurfer asked macOS for
+    /// did not come.
+    func whyNoStart() {
+        for other in testBrowsers {
+            say("      \(other.name), its own processes: \(mainProcesses(of: other.binary))")
+        }
+        say("      starts macOS has answered so far: \(answeredStarts())")
+        say("      SuperSurfer's threads:")
+        for line in superSurferThreads() {
+            say("        \(line)")
+        }
     }
 
     // Three profiles, each with one window that shows a page of its own. The
@@ -1837,6 +1893,7 @@ func testShortcuts(
             return arguments.contains("--profile-directory=Profile 1")
         }
         if !started {
+            whyNoStart()
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
@@ -1855,6 +1912,7 @@ func testShortcuts(
             closePicker(showing: page)
             stop("the picker has no Work below \(browser.name): \(below) of \(all)")
         }
+        let answeredBefore = answeredStarts()
         post(.mouseMoved, at: spot)
         pause(0.3)
         press(at: spot)
@@ -1867,9 +1925,11 @@ func testShortcuts(
             return startedWith.contains("--profile-directory=Profile 1") && startedWith.contains(page)
         }
         if !opened {
+            whyNoStart()
             stop("\(browser.name) was not started with the profile and the link: \(startedWith.isEmpty ? "not running" : startedWith)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1 and the link")
+        say("      its own processes: \(mainProcesses(of: browser.binary))")
         // Where the link went is listed under the same name.
         _ = clickDownMenu([])
         let recent = entryTitles(statusMenuEntries())
@@ -1881,7 +1941,10 @@ func testShortcuts(
         }
         say("ok    and Recent Links has it as \(browser.name) (Work)")
         pause(2)
+        say("      macOS has \(answeredStarts() > answeredBefore ? "answered" : "not answered") that start by now")
         quit()
+        pause(4)
+        say("      and four seconds after the browser was quit it has \(answeredStarts() > answeredBefore ? "answered" : "not answered")")
     }
 }
 
