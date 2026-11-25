@@ -698,6 +698,36 @@ struct ProfileShortcut {
     }
 }
 
+/// Where the work on one click is. A click is answered in a fraction of a
+/// second, or it hangs on something outside SuperSurfer: the engine reading
+/// a profile list, or a browser that does not answer. The trace of a click
+/// that hangs used to end with "asked for" and say nothing about where the
+/// time went.
+private final class ClickStage {
+    private let lock = NSLock()
+    private var stage = "looking up the shortcut"
+    private var finished = false
+
+    func enter(_ next: String) {
+        lock.lock()
+        stage = next
+        lock.unlock()
+    }
+
+    func finish() {
+        lock.lock()
+        finished = true
+        lock.unlock()
+    }
+
+    /// The stage the click is in, or nil once it has been answered.
+    var unfinished: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return finished ? nil : stage
+    }
+}
+
 final class ProfileShortcuts {
     static let shared = ProfileShortcuts()
 
@@ -1005,6 +1035,17 @@ final class ProfileShortcuts {
     }
 
     private func show(browser browserID: String, directory: String, engine: EngineBridge, asked: TimeInterval) {
+        let stage = ClickStage()
+        defer { stage.finish() }
+        if AppDelegate.traceToStderr {
+            for seconds in [2, 6, 15] {
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(seconds)) {
+                    if let still = stage.unfinished {
+                        ProfileShortcuts.trace("\(browserID), \(directory): after \(seconds) s still \(still)")
+                    }
+                }
+            }
+        }
         // The link can come from anywhere. It is acted on only for a profile
         // the user made a shortcut for.
         let known = ProfileShortcut.all(in: ProfileShortcuts.folder)
@@ -1014,7 +1055,9 @@ final class ProfileShortcuts {
         }
         // What the engine knows now comes first: a profile may have been
         // renamed since the shortcut was written.
+        stage.enter("asking the engine for the browser's profiles")
         let browsers = engine.shortcuts()?.browsers ?? []
+        stage.enter("looking for the running browser")
         if known.contains(where: { $0.title != $0.nameInside }) {
             // A shortcut was renamed in the Finder. The click is not held up
             // by that: the icons get their new letters on the main thread,
@@ -1032,6 +1075,7 @@ final class ProfileShortcuts {
         let bundleID = listed?.bundleId ?? Bundle(path: browserPath)?.bundleIdentifier
 
         func openWindow(_ why: String) {
+            stage.enter("asking macOS to open a window of the profile")
             Launcher.openProfileWindow(appPath: browserPath, arguments: arguments) { error in
                 // An error here need not mean that nothing was started: a
                 // browser that starts itself again while starting is
@@ -1058,10 +1102,17 @@ final class ProfileShortcuts {
             return
         }
         if browser.isHidden {
+            stage.enter("asking the hidden browser to show itself")
             browser.unhide()
         }
         let found = ProcessInfo.processInfo.systemUptime
-        switch ProfileShortcuts.pressProfileEntry(of: browser.processIdentifier, titled: titles, named: name) {
+        stage.enter("asking the browser for its menu bar")
+        switch ProfileShortcuts.pressProfileEntry(
+            of: browser.processIdentifier,
+            titled: titles,
+            named: name,
+            stage: stage
+        ) {
         case .pressed(let title):
             let pressed = ProcessInfo.processInfo.systemUptime
             // A browser that is behind another app comes forward by itself
@@ -1110,7 +1161,12 @@ final class ProfileShortcuts {
 
     /// Finds the browser's profile menu and presses the entry that stands
     /// for the profile.
-    private static func pressProfileEntry(of pid: pid_t, titled wanted: [String], named name: String) -> Press {
+    private static func pressProfileEntry(
+        of pid: pid_t,
+        titled wanted: [String],
+        named name: String,
+        stage: ClickStage
+    ) -> Press {
         let app = patient(AXUIElementCreateApplication(pid))
         guard let found = AX.value(app, kAXMenuBarAttribute),
               CFGetTypeID(found) == AXUIElementGetTypeID() else {
@@ -1118,7 +1174,9 @@ final class ProfileShortcuts {
         }
         let bar = patient(found as! AXUIElement)
         // The profile menu is one of the last, before Tab, Window and Help.
-        for barItem in AX.elements(bar, kAXChildrenAttribute).reversed() {
+        let barItems = AX.elements(bar, kAXChildrenAttribute)
+        for (fromEnd, barItem) in barItems.reversed().enumerated() {
+            stage.enter("asking the browser about its menus, at number \(fromEnd + 1) of \(barItems.count) from the right")
             for menu in AX.elements(patient(barItem), kAXChildrenAttribute) {
                 let items = AX.elements(patient(menu), kAXChildrenAttribute)
                 // The profiles come first in their menu.
@@ -1130,6 +1188,7 @@ final class ProfileShortcuts {
                 guard let index = ProfileShortcutRules.entry(for: wanted, named: name, in: titles) else {
                     return .noEntry(titles)
                 }
+                stage.enter("waiting for the browser to take the choice of \"\(titles[index])\" in its profile menu")
                 let result = AXUIElementPerformAction(
                     patient(entries[index], pressTimeout),
                     kAXPressAction as CFString
