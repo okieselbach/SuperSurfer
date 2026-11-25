@@ -1429,6 +1429,30 @@ final class ProfileShortcuts {
                 taken.count == 2 && privat?.title == "Edge Privat" && privat?.nameInside == "Edge Privat"
                     && privat?.badge == "P" && privat?.color == second.color
             )
+
+            // The same for a shortcut that version 0.3.0 wrote. It notes
+            // neither its letters nor what the browser is called, and the
+            // engine may have nothing on the browser. The name it was first
+            // given, which is still inside it, tells where the browser's
+            // part of a name ends.
+            if let newer = privat {
+                let plist = newer.bundle.appendingPathComponent("Contents/Info.plist")
+                var older = (NSDictionary(contentsOf: plist) as? [String: Any]) ?? [:]
+                older["SuperSurferBadge"] = nil
+                older["SuperSurferBrowserNames"] = nil
+                older["CFBundleName"] = "Edge Work"
+                try PropertyListSerialization.data(fromPropertyList: older, format: .xml, options: 0).write(to: plist)
+                try FileManager.default.moveItem(at: newer.bundle, to: folder.appendingPathComponent("Edge Zuhause.app"))
+                let later = ProfileShortcuts.shared.dressedForTheirNames(ProfileShortcut.all(in: folder), browsers: [])
+                let home = later.first { $0.isFor(browser: "edge", directory: "Profile 2") }
+                check(
+                    "dock shortcut: so is the name of a shortcut from before names could be chosen",
+                    home?.title == "Edge Zuhause" && home?.nameInside == "Edge Zuhause" && home?.badge == "Z"
+                        && home?.browserNames.first == "Edge"
+                )
+            } else {
+                check("dock shortcut: so is the name of a shortcut from before names could be chosen", false)
+            }
         } catch {
             check("dock shortcut: could be written (\(error.localizedDescription))", false)
         }
