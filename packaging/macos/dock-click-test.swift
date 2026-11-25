@@ -60,9 +60,19 @@ func waitUntil(_ timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
 
 // MARK: - Accessibility
 
+/// How many questions to other apps got no answer in the time set above. An
+/// app that is busy is silent like that for a moment, and the question then
+/// comes back as if there were nothing to tell. A check that must not take
+/// that for an answer compares this number before and after it looks.
+var unanswered = 0
+
 func value(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
     var found: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &found) == .success else {
+    let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &found)
+    if result == .cannotComplete {
+        unanswered += 1
+    }
+    guard result == .success else {
         return nil
     }
     return found
@@ -461,12 +471,47 @@ func state(of app: NSRunningApplication) -> String {
         + "hidden: \(app.isHidden), in front: \(front)"
 }
 
+/// What the app itself lists as its windows, for a check that failed. The
+/// window server and the app are asked in different ways, and only the app
+/// can fail to answer.
+func ownAccount(of app: NSRunningApplication) -> String {
+    let before = unanswered
+    let windows = elements(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute)
+    let listed = windows.map { window -> String in
+        let title = text(window, kAXTitleAttribute) ?? "?"
+        return (value(window, kAXMainAttribute) as? Bool) == true ? "\"\(title)\" (main)" : "\"\(title)\""
+    }
+    if unanswered != before {
+        return "\(name(app)) gave no answer when asked for its windows"
+    }
+    return "\(name(app)) itself lists \(listed.count) windows: \(listed.joined(separator: ", "))"
+}
+
+/// What the condition of a check saw at its latest look, in words, where the
+/// condition says so. A check that fails prints it: what is there a moment
+/// later need not be what the look saw.
+var lastLook = ""
+
+func fail(_ what: String, of app: NSRunningApplication, because why: String? = nil) -> Never {
+    say("FAIL  \(what)")
+    if let why = why {
+        say("      \(why)")
+    }
+    if !lastLook.isEmpty {
+        say("      the last look saw: \(lastLook)")
+    }
+    say("      \(state(of: app))")
+    say("      \(ownAccount(of: app))")
+    exit(1)
+}
+
 func expect(
     _ what: String,
     of app: NSRunningApplication,
     within timeout: TimeInterval = 6,
     _ condition: () -> Bool
 ) {
+    lastLook = ""
     var arrived = waitUntil(timeout, condition)
     // Repeated is only a press that was no click. A click that did not do
     // what it should is what this test is there to find.
@@ -482,14 +527,21 @@ func expect(
     }
     lastClick = nil
     guard arrived else {
-        say("FAIL  \(what)")
-        say("      \(state(of: app))")
-        exit(1)
+        fail(what, of: app)
     }
     say("ok    \(what)")
 }
 
+/// How long `stays` goes on asking an app that does not answer, once its
+/// time is up.
+let patienceWithSilence: TimeInterval = 10
+
 /// The condition must hold now and keep holding: for what must not happen.
+///
+/// A look during which an app left a question unanswered has seen nothing,
+/// so it counts neither way: a browser that is busy for a second has not
+/// opened a window by that. The check therefore ends with a look that got
+/// its answers, and fails for want of one if the app stays silent.
 func stays(_ what: String, of app: NSRunningApplication, for duration: TimeInterval, _ condition: () -> Bool) {
     if let last = lastClick, last.wasNoClick {
         // Not repeated: for some of these checks it matters when the click
@@ -497,14 +549,30 @@ func stays(_ what: String, of app: NSRunningApplication, for duration: TimeInter
         say("      " + notAClick(last) + ", so this says less than it should")
     }
     lastClick = nil
+    lastLook = ""
     let end = Date().addingTimeInterval(duration)
-    while Date() < end {
-        guard condition() else {
-            say("FAIL  \(what)")
-            say("      \(state(of: app))")
-            exit(1)
+    var silent = 0
+    var answered = false
+    while Date() < end || !answered {
+        let before = unanswered
+        let holds = condition()
+        if unanswered == before {
+            guard holds else {
+                fail(what, of: app)
+            }
+            answered = true
+        } else {
+            silent += 1
+            answered = false
+            guard Date() < end.addingTimeInterval(patienceWithSilence) else {
+                fail(what, of: app, because: "an app has left the questions of \(silent) looks unanswered, "
+                    + "the latest \(Int(patienceWithSilence)) s after the time was up, so this cannot be told")
+            }
         }
         pause(0.1)
+    }
+    if silent > 0 {
+        say("      \(silent) of the looks got no answer from an app in time and were left out")
     }
     say("ok    \(what)")
 }
@@ -1236,6 +1304,17 @@ func testShortcuts(
     func inFront(_ page: String) -> Bool {
         return isInFront(app) && !app.isHidden && mainWindowTitle(app).contains(page)
     }
+    /// Whether the browser lists this many windows. What it lists is noted
+    /// for a check that fails.
+    func hasWindows(_ count: Int) -> Bool {
+        let windows = axWindows(app)
+        let listed = windows.map { window -> String in
+            let title = text(window, kAXTitleAttribute) ?? "?"
+            return isMain(window) ? "\"\(title)\" (main)" : "\"\(title)\""
+        }
+        lastLook = "\(windows.count) windows: \(listed.joined(separator: ", "))"
+        return windows.count == count
+    }
     func calculatorInFront() {
         _ = bringToFront("Calculator", "com.apple.calculator", windows: 1)
     }
@@ -1247,7 +1326,7 @@ func testShortcuts(
         inFront("sst-second")
     }
     stays("and no window was added", of: app, for: 1.5) {
-        axWindows(app).count == 3 && inFront("sst-second")
+        hasWindows(3) && inFront("sst-second")
     }
 
     say("-- the other shortcut brings the other profile's window forward, and back")
@@ -1260,13 +1339,13 @@ func testShortcuts(
         inFront("sst-second")
     }
     stays("and there are still three windows", of: app, for: 1.5) {
-        axWindows(app).count == 3
+        hasWindows(3)
     }
 
     say("-- a link for a profile without a shortcut is left alone")
     run("/usr/bin/open", ["-g", "-a", superSurfer, "supersurfer://profile/\(browser.id)/Default"])
     stays("the window of \(second) stays in front", of: app, for: 3) {
-        inFront("sst-second") && axWindows(app).count == 3
+        hasWindows(3) && inFront("sst-second")
     }
 
     say("-- a window that sits in the Dock comes out of it")
@@ -1298,13 +1377,13 @@ func testShortcuts(
         AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
     }
     expect("the window of \(third) is closed", of: app, within: 10) {
-        axWindows(app).count == 2
+        hasWindows(2)
     }
     calculatorInFront()
     use(third)
     expect("a third window is in front, and it is none of the other two", of: app, within: 30) {
         let title = mainWindowTitle(app)
-        return isInFront(app) && axWindows(app).count == 3
+        return hasWindows(3) && isInFront(app)
             && !title.isEmpty && !title.contains("sst-first") && !title.contains("sst-second")
     }
     say("      its title: \(mainWindowTitle(app))")

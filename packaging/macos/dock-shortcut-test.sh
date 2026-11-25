@@ -36,9 +36,22 @@ cleanup() {
     wait "$PID" 2>/dev/null || true
     PID=""
   fi
-  # Browsers the test started and did not get to quit.
-  pkill -f -- "--user-data-dir=$SCRATCH" 2>/dev/null || true
-  rm -rf "$SCRATCH"
+  # Browsers the test started and did not get to quit, which is how it is
+  # after a check failed. They write below the scratch HOME until they are
+  # gone, so it is removed after them.
+  if pkill -f -- "--user-data-dir=$SCRATCH" 2>/dev/null; then
+    local tries=0
+    while pgrep -f -- "--user-data-dir=$SCRATCH" >/dev/null 2>&1 && [ "$tries" -lt 24 ]; do
+      # Ten seconds to quit when asked, then they are not asked any more.
+      if [ "$tries" -eq 20 ]; then
+        pkill -9 -f -- "--user-data-dir=$SCRATCH" 2>/dev/null || true
+      fi
+      sleep 0.5
+      tries=$((tries + 1))
+    done
+  fi
+  # How the test went is decided by now, and not by whether this works.
+  rm -rf "$SCRATCH" || true
 }
 trap cleanup EXIT
 
