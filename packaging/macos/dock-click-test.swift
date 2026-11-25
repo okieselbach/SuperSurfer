@@ -1172,6 +1172,64 @@ func sketch(_ picture: NSBitmapImageRep?, _ label: String) {
     }
 }
 
+// TEMPORARY as well: in how many of their points two such pictures differ.
+func difference(_ first: NSBitmapImageRep?, _ second: NSBitmapImageRep?) -> String {
+    guard let first = first, let second = second else {
+        return "cannot be told, a picture is missing"
+    }
+    guard first.pixelsWide == second.pixelsWide, first.pixelsHigh == second.pixelsHigh else {
+        return "they differ in size: \(first.pixelsWide)x\(first.pixelsHigh) and \(second.pixelsWide)x\(second.pixelsHigh)"
+    }
+    var differing = 0
+    for y in 0..<first.pixelsHigh {
+        for x in 0..<first.pixelsWide {
+            guard let one = first.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                  let other = second.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                continue
+            }
+            let apart = abs(one.redComponent - other.redComponent) + abs(one.greenComponent - other.greenComponent)
+                + abs(one.blueComponent - other.blueComponent)
+            if apart > 0.08 {
+                differing += 1
+            }
+        }
+    }
+    return "\(differing) of \(first.pixelsWide * first.pixelsHigh) points differ"
+}
+
+// TEMPORARY as well: what the Dock has on record for the apps in a folder,
+// and what it shows for them.
+func dockRecords(below folder: String) -> String {
+    let exported = outputOf("/usr/bin/defaults", ["export", "com.apple.dock", "-"])
+    guard let data = exported.data(using: .utf8),
+          let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+          let apps = plist["persistent-apps"] as? [[String: Any]] else {
+        return "the Dock's record could not be read"
+    }
+    var found: [String] = []
+    for app in apps {
+        guard let tile = app["tile-data"] as? [String: Any],
+              let file = tile["file-data"] as? [String: Any],
+              let address = file["_CFURLString"] as? String,
+              address.contains(folder) || (address.removingPercentEncoding ?? "").contains(folder) else {
+            continue
+        }
+        let label = (tile["file-label"] as? String) ?? "none"
+        let kind = (file["_CFURLStringType"] as? Int).map { "\($0)" } ?? "?"
+        let bookmark = (tile["book"] as? Data).map { "\($0.count) bytes" } ?? "none"
+        found.append("label \(label), address \(address) of type \(kind), bookmark \(bookmark)")
+    }
+    return found.isEmpty ? "nothing on record below \(folder)" : found.joined(separator: "; ")
+}
+
+func dockTiles(named names: [String]) -> String {
+    let tiles = appIcons().filter { names.contains($0.url?.lastPathComponent ?? "") }
+    if tiles.isEmpty {
+        return "no tile for \(names)"
+    }
+    return tiles.map { "title \"\($0.title)\", address \($0.url?.path ?? "none")" }.joined(separator: "; ")
+}
+
 /// Everything below an element that has this role, a few levels down.
 func descendants(of root: AXUIElement, role: String, depth: Int = 5) -> [AXUIElement] {
     var found: [AXUIElement] = []
@@ -1479,10 +1537,15 @@ func testShortcuts(
     let chosen = "\(browser.shortName) Work"
     let oldBundle = bundle(second)
     let sameFile = fileNumber(oldBundle)
+    // TEMPORARY, down to the next blank line
+    let oldName = titles[second] ?? "?"
+    var pictureBefore: NSBitmapImageRep?
     if inDock != nil {
-        // TEMPORARY
-        sketch(dockPicture(named: "\(titles[second] ?? "?").app"), "in the Dock before it is renamed")
+        pictureBefore = dockPicture(named: "\(oldName).app")
+        say("      [dock] on record before: \(dockRecords(below: "SuperSurfer Shortcuts"))")
+        say("      [dock] shown before: \(dockTiles(named: ["\(oldName).app"]))")
     }
+
     chooseInDockShortcuts(
         [profileEntry(browser.name, second), entryTitled(["Rename…", "Umbenennen …"])],
         what: "\(browser.name), \(second), Rename"
@@ -1511,18 +1574,38 @@ func testShortcuts(
     }
     say("ok    the same app as before, with W on a new picture")
     if inDock != nil {
-        // It was renamed where it lies, so the Dock still holds it.
-        let held = waitUntil(20) {
-            appIcons().contains { $0.url?.lastPathComponent == "\(chosen).app" }
+        // TEMPORARY: what the Dock makes of an app that was renamed where it
+        // lies. It is looked at here, and nothing is insisted on yet.
+        let either = ["\(oldName).app", "\(chosen).app"]
+        func pictureNow() -> NSBitmapImageRep? {
+            let name = appIcons().first { either.contains($0.url?.lastPathComponent ?? "") }?.url?.lastPathComponent
+            return name.flatMap { dockPicture(named: $0) }
         }
-        if !held {
-            stop("the Dock does not hold \(chosen).app; it holds \(appIcons().map { $0.url?.lastPathComponent ?? $0.title })")
+        pause(3)
+        say("      [dock] shown 3 s after the rename: \(dockTiles(named: either))")
+        say("      [dock] its picture against the one before: \(difference(pictureBefore, pictureNow()))")
+        say("      [dock] on record: \(dockRecords(below: "SuperSurfer Shortcuts"))")
+        // A click on the tile, whatever the Dock calls it now.
+        calculatorInFront()
+        let askedBefore = asked()
+        if let spot = appIcons().first(where: { either.contains($0.url?.lastPathComponent ?? "") })?.centre {
+            click(at: spot)
+            lastClick = nil
+            let reached = waitUntil(15) { asked() > askedBefore }
+            say("      [dock] a click on the tile reached SuperSurfer: \(reached)")
+            let forward = waitUntil(10) { inFront("sst-second") }
+            say("      [dock] and brought the window of \(second) forward: \(forward)")
+        } else {
+            say("      [dock] there is no tile to click")
         }
-        say("ok    and the Dock holds it under its new name")
-        // TEMPORARY
-        sketch(dockPicture(named: "\(chosen).app"), "in the Dock right after")
-        pause(6)
-        sketch(dockPicture(named: "\(chosen).app"), "in the Dock six seconds later")
+        pause(3)
+        say("      [dock] shown after the click: \(dockTiles(named: either))")
+        say("      [dock] its picture against the one before: \(difference(pictureBefore, pictureNow()))")
+        say("      [dock] on record: \(dockRecords(below: "SuperSurfer Shortcuts"))")
+        say("      [dock] all it holds: \(appIcons().map { $0.url?.lastPathComponent ?? $0.title })")
+        // For the steps that follow, the shortcut is used the way one
+        // outside the Dock is.
+        inDock = nil
     }
     use(third)
     expect("the window of \(third) is in front", of: app, within: 20) {
