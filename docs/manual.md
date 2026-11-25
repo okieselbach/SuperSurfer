@@ -130,6 +130,20 @@ Commands in a terminal run with the permissions of the terminal app. Give that a
 
 macOS ties the permission to the app's signature. Releases are not signed with a Developer ID yet, so expect to give it again after an update.
 
+After an update a switch may jump back to off as soon as you switch it on, and the menu goes on saying that the profiles cannot be read. The switch then seems to belong to the build before still. This was seen on macOS 27 after the update from 0.2.0 to 0.3.0, and what helped was to start over:
+
+1. Quit SuperSurfer.
+2. Take back what macOS has noted for it:
+
+   ```bash
+   tccutil reset All dev.supersurfer.app
+   ```
+
+3. Open SuperSurfer and its menu once, so that macOS is asked and makes the switches anew. Quit it again.
+4. Switch on the browsers under Files & Folders, and open SuperSurfer.
+
+The reset takes back the Accessibility permission as well. Dock Click and the Dock shortcuts ask for it again.
+
 ### Dock Click
 
 Clicking the Dock icon of the app you are already in normally does nothing on macOS. Choose **Dock Click → Hide App** or **Minimize Windows** in the menu and that click puts the app away; the next click on the icon brings it back. With *Minimize Windows*, every window the app has on the current Space goes into the Dock, and all of them come back together.
@@ -191,7 +205,7 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 
 **Routing falls back to default** — run `supersurfer test <url>` and fix config errors shown on stderr.
 
-**No profiles, or links open in the wrong profile (macOS 27 and later)** — macOS no longer lets apps read browser data unasked. See [Browser profiles on macOS 27 and later](#browser-profiles-on-macos-27-and-later).
+**No profiles, or links open in the wrong profile (macOS 27 and later)** — macOS no longer lets apps read browser data unasked. See [Browser profiles on macOS 27 and later](#browser-profiles-on-macos-27-and-later). The same section says what to do when the switch under Files & Folders jumps back to off after an update.
 
 **"Apple could not verify…" when opening the app (macOS)** — run `xattr -cr /Applications/SuperSurfer.app` once after downloading.
 

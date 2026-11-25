@@ -115,7 +115,7 @@ If `config.js` stops loading — a typo, a half-saved file — links keep follow
 
 The icon can be dragged out of the menu bar with ⌘ held. Opening the app again (`open -a SuperSurfer`, Spotlight, Finder) brings it back and shows the menu.
 
-macOS 27 and later keep apps away from browser data, which includes the names of browser profiles. Links are routed all the same; the menu then shows **⚠︎ Browser profiles cannot be read** and says how to allow access. Until then a Chromium profile is only found when named by its folder (`"edge:Profile 1"`). Details: [manual](docs/manual.md#browser-profiles-on-macos-27-and-later).
+macOS 27 and later keep apps away from browser data, which includes the names of browser profiles. Links are routed all the same; the menu then shows **⚠︎ Browser profiles cannot be read** and says how to allow access. Until then a Chromium profile is only found when named by its folder (`"edge:Profile 1"`). Details, and what to do when the switch for a browser jumps back to off after an update: [manual](docs/manual.md#browser-profiles-on-macos-27-and-later).
 
 ### Picker
 
