@@ -1439,6 +1439,8 @@ func testShortcuts(
         for other in testBrowsers {
             say("      \(other.name), its own processes: \(mainProcesses(of: other.binary))")
         }
+        let windows = running().map { axWindows($0).map { text($0, kAXTitleAttribute) ?? "?" } } ?? []
+        say("      \(browser.name), its windows: \(windows)")
         say("      starts macOS has answered so far: \(answeredStarts())")
         say("      SuperSurfer's threads:")
         for line in superSurferThreads() {
@@ -1912,6 +1914,18 @@ func testShortcuts(
         // SuperSurfer starts the browser the way it does for a link, so with
         // the profiles the browser really has on this Mac, not with the ones
         // made above. What can be checked is what it was started with.
+        // A browser that has never been run on this Mac has a question
+        // before its first window, and a runner's browsers never have. The
+        // file below is how a Chromium browser notes that this is behind
+        // it. Tried in run 67: is that question what keeps macOS from
+        // answering the start?
+        let ownData = NSHomeDirectory() + "/Library/Application Support/" + browser.dataFolder
+        let firstRun = ownData + "/First Run"
+        if !FileManager.default.fileExists(atPath: firstRun) {
+            try? FileManager.default.createDirectory(atPath: ownData, withIntermediateDirectories: true)
+            let noted = FileManager.default.createFile(atPath: firstRun, contents: nil)
+            say("      \(browser.name) has never been run here; noted for it that it has: \(noted)")
+        }
         say("-- a browser that is not running is started with the profile")
         let answeredSoFar = answeredStarts()
         use(second)
