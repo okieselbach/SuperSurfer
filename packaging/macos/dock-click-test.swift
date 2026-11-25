@@ -1427,6 +1427,24 @@ func testShortcuts(
             say("        \(line)")
         }
     }
+    /// Waits until macOS has answered SuperSurfer a start it was asked for.
+    /// `before` is what `answeredStarts` said before the start was asked for.
+    ///
+    /// A browser is not quit before that. Launch Services hands on what one
+    /// app asks it to open one request at a time, and each waits for its
+    /// answer. Runs 63 and 64 quit Edge three seconds after SuperSurfer had
+    /// started it, and again seven seconds after it had started it a second
+    /// time. The second start was never answered, not even once Edge was
+    /// gone, and with that SuperSurfer could start nothing more: Chrome,
+    /// asked for a minute and a half later, never came.
+    func awaitAnswer(since before: Int) {
+        let began = Date()
+        guard waitUntil(40, { answeredStarts() > before }) else {
+            whyNoStart()
+            stop("macOS has not answered the start of \(browser.name) for 40 s, although \(browser.name) is there")
+        }
+        say(String(format: "      macOS answered that start %.1f s later", Date().timeIntervalSince(began)))
+    }
 
     // Three profiles, each with one window that shows a page of its own. The
     // title of the page tells whose window is in front. The profiles are
@@ -1883,6 +1901,7 @@ func testShortcuts(
         // the profiles the browser really has on this Mac, not with the ones
         // made above. What can be checked is what it was started with.
         say("-- a browser that is not running is started with the profile")
+        let answeredSoFar = answeredStarts()
         use(second)
         var arguments = ""
         let started = waitUntil(40) {
@@ -1897,6 +1916,7 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
+        awaitAnswer(since: answeredSoFar)
         pause(2)
         quit()
 
@@ -1929,7 +1949,7 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile and the link: \(startedWith.isEmpty ? "not running" : startedWith)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1 and the link")
-        say("      its own processes: \(mainProcesses(of: browser.binary))")
+        awaitAnswer(since: answeredBefore)
         // Where the link went is listed under the same name.
         _ = clickDownMenu([])
         let recent = entryTitles(statusMenuEntries())
@@ -1941,10 +1961,7 @@ func testShortcuts(
         }
         say("ok    and Recent Links has it as \(browser.name) (Work)")
         pause(2)
-        say("      macOS has \(answeredStarts() > answeredBefore ? "answered" : "not answered") that start by now")
         quit()
-        pause(4)
-        say("      and four seconds after the browser was quit it has \(answeredStarts() > answeredBefore ? "answered" : "not answered")")
     }
 }
 
