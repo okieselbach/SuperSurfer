@@ -1594,6 +1594,99 @@ func testShortcuts(
         return chosenNames[found] ?? names[found] ?? given
     }
 
+    /// TEMPORARY. How long macOS takes over a link that SuperSurfer hands
+    /// to a browser that is running: one link at a time, and three in a
+    /// row. The browser runs the way a person has it, with the profiles in
+    /// its own folder, so that the instance SuperSurfer starts for a link
+    /// finds it and passes the link on.
+    func handoffTrial() {
+        let config = home + "/Library/Application Support/SuperSurfer/config.js"
+        let configBefore = try? String(contentsOfFile: config, encoding: .utf8)
+        let own = "export default {\n  defaultBrowser: \"\(browser.id):\(second)\",\n  handlers: [],\n};\n"
+        try? own.write(toFile: config, atomically: true, encoding: .utf8)
+        defer {
+            if let text = configBefore {
+                try? text.write(toFile: config, atomically: true, encoding: .utf8)
+            }
+        }
+        func page(_ name: String) -> String {
+            let file = pages + "/\(name).html"
+            try? "<!doctype html><title>\(name)</title><p>\(name)</p>".write(toFile: file, atomically: true, encoding: .utf8)
+            return file
+        }
+        func linkLines() -> [String] {
+            let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
+            return text.components(separatedBy: "\n").filter {
+                $0.contains("SuperSurfer: routed ") || $0.contains("accepted it after") || $0.contains("could not open")
+            }
+        }
+        // The flags keep the browser from what holds it up on a runner.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = [
+            "--profile-directory=Profile 1",
+            "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--use-mock-keychain",
+            URL(fileURLWithPath: page("sst-h0")).absoluteString,
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            say("      TEMPORARY \(browser.shortName) did not start: \(error.localizedDescription)")
+            return
+        }
+        let up = waitUntil(40) { running().map { window(of: $0, showing: "sst-h0") != nil } ?? false }
+        guard up, let live = running() else {
+            say("      TEMPORARY \(browser.shortName) with its own profiles shows no window: \(whatIsThere())")
+            quit()
+            return
+        }
+        say("      TEMPORARY \(browser.shortName) is running with its own profiles")
+        pause(2)
+        var seen = linkLines().count
+        for name in ["sst-h1", "sst-h2", "sst-h3"] {
+            let file = page(name)
+            let began = Date()
+            run("/usr/bin/open", ["-g", "-a", superSurfer, file])
+            let shown = waitUntil(20) { window(of: live, showing: name) != nil }
+            say(String(
+                format: "      TEMPORARY one link, %@: %@ %.2f s after it was sent",
+                name, shown ? "its page is there" : "NO page", Date().timeIntervalSince(began)
+            ))
+            _ = waitUntil(12) { linkLines().count >= seen + 2 }
+            for line in linkLines().dropFirst(seen) {
+                say("        \(line)")
+            }
+            seen = linkLines().count
+            pause(1)
+        }
+        let burst = ["sst-b1", "sst-b2", "sst-b3"]
+        let files = burst.map(page)
+        let start = Date()
+        for file in files {
+            run("/usr/bin/open", ["-g", "-a", superSurfer, file])
+            usleep(300_000)
+        }
+        var firstSeen: [String: TimeInterval] = [:]
+        while Date().timeIntervalSince(start) < 25, firstSeen.count < burst.count {
+            let titles = axWindows(live).map { text($0, kAXTitleAttribute) ?? "" }
+            for name in burst where firstSeen[name] == nil && titles.contains(where: { $0.contains(name) }) {
+                firstSeen[name] = Date().timeIntervalSince(start)
+            }
+            usleep(50_000)
+        }
+        for name in burst {
+            let when = firstSeen[name].map { String(format: "its page was there %.2f s after the first was sent", $0) }
+            say("      TEMPORARY three in a row, \(name): \(when ?? "NO page in 25 s")")
+        }
+        _ = waitUntil(15) { linkLines().count >= seen + 6 }
+        for line in linkLines().dropFirst(seen) {
+            say("        \(line)")
+        }
+        quit()
+    }
+
     say("-- a shortcut is made in SuperSurfer's menu")
     for profile in [second, third] {
         chooseInDockShortcuts([profileEntry(browser.name, profile)], what: "\(browser.name), \(profile)")
@@ -1954,6 +2047,9 @@ func testShortcuts(
         // Two seconds and no other time: see `TestBrowser.chosenInPicker`.
         pause(2)
         quit()
+        // TEMPORARY: for both browsers.
+        awaitAnswer(since: answeredSoFar)
+        handoffTrial()
         guard browser.chosenInPicker else {
             return
         }
@@ -1961,7 +2057,6 @@ func testShortcuts(
         // The entry says "Work". What SuperSurfer hands on has to be the
         // profile behind it, by the name the browser has for it. That takes
         // a second start, and macOS has to have answered the first.
-        awaitAnswer(since: answeredSoFar)
         say("-- a profile chosen in the picker under its shortcut's name is the one that opens")
         let page = "sst-second.html"
         let entries = openPicker(for: URL(fileURLWithPath: pages + "/" + page).absoluteString, showing: page)
