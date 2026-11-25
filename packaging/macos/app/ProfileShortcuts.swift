@@ -111,11 +111,19 @@ enum ProfileShortcutRules {
         """
     }
 
-    /// "Edge Work": what the shortcut is called in the Dock and the Finder.
+    /// "Edge Work": what the shortcut is called in the Dock and the Finder
+    /// until someone gives it another name.
     static func title(browser: String, profile: String) -> String {
+        let name = fileName("\(browser) \(profile)")
+        return name.isEmpty ? "Shortcut" : name
+    }
+
+    /// A name the Finder can take, made of what was typed or read: one line,
+    /// no "/" or ":", not hidden and not endless. Empty if nothing is left.
+    static func fileName(_ text: String) -> String {
         var cleaned = ""
         var afterSpace = true
-        for character in "\(browser) \(profile)" {
+        for character in text {
             if character.isWhitespace || character.isNewline {
                 if !afterSpace {
                     cleaned.append(" ")
@@ -136,7 +144,36 @@ enum ProfileShortcutRules {
         if cleaned.hasPrefix(".") {
             cleaned = "_" + String(cleaned.dropFirst())
         }
-        return cleaned.isEmpty ? "Shortcut" : String(cleaned.prefix(100))
+        return String(cleaned.prefix(100))
+    }
+
+    /// The name a person typed for a shortcut, as a file name. People who
+    /// see "Edge Work.app" in the Finder may type the ending too.
+    static func typedName(_ typed: String) -> String {
+        var name = fileName(typed)
+        if name.count > 4, name.lowercased().hasSuffix(".app") {
+            name = fileName(String(name.dropLast(4)))
+        }
+        return name
+    }
+
+    /// What a shortcut's name says about the profile, which is what its
+    /// badge is made of: the name without the browser in front. "Edge Work"
+    /// is "Work", and so is "Microsoft Edge Work". A name that is nothing
+    /// but the browser, or does not begin with it, is taken whole.
+    static func label(of title: String, browserNames: [String]) -> String {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The longest first: "Edge Beta Work" is "Work" for Edge Beta.
+        for browser in browserNames.sorted(by: { $0.count > $1.count }) where !browser.isEmpty {
+            guard let front = name.range(of: browser + " ", options: [.caseInsensitive, .anchored]) else {
+                continue
+            }
+            let rest = name[front.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rest.isEmpty {
+                return rest
+            }
+        }
+        return name
     }
 
     static func bundleIdentifier(browser: String, directory: String) -> String {
@@ -341,6 +378,8 @@ enum ShortcutIcon {
 enum ShortcutError: LocalizedError {
     case unusableName(String)
     case notWritten(String)
+    case nameTaken(String)
+    case gone(String)
 
     var errorDescription: String? {
         switch self {
@@ -351,6 +390,16 @@ enum ShortcutError: LocalizedError {
             )
         case .notWritten(let path):
             return tr("Nothing usable was written to \(path).", "Unter \(path) ist nichts Brauchbares entstanden.")
+        case .nameTaken(let name):
+            return tr(
+                "The folder of shortcuts already has an app called \"\(name)\".",
+                "Im Ordner der Verknüpfungen heißt schon eine App „\(name)“."
+            )
+        case .gone(let name):
+            return tr(
+                "\"\(name)\" is no longer where it was. Open the menu again.",
+                "„\(name)“ liegt nicht mehr dort, wo es war. Öffne das Menü noch einmal."
+            )
         }
     }
 }
@@ -369,11 +418,19 @@ struct ProfileShortcut {
         static let launchArguments = "SuperSurferLaunchArguments"
         static let browserPath = "SuperSurferBrowserPath"
         static let color = "SuperSurferBadgeColor"
+        static let badge = "SuperSurferBadge"
+        static let browserNames = "SuperSurferBrowserNames"
     }
 
     let bundle: URL
-    /// The name of the app without ".app".
+    /// The name of the app without ".app". This is the shortcut's name, and
+    /// it is the user's to choose: in SuperSurfer's menu or in the Finder.
     let title: String
+    /// The name the inside of the app was made for: the one in its
+    /// Info.plist, which the letters on its icon stand for. It differs from
+    /// `title` after the app was renamed in the Finder, until `dressed`
+    /// makes the inside follow.
+    let nameInside: String
     let browser: String
     let directory: String
     // As they were when the shortcut was written. The engine's current list
@@ -382,7 +439,16 @@ struct ProfileShortcut {
     let menuTitles: [String]
     let launchArguments: [String]
     let browserPath: String
+    /// What the browser is called, short and in full, for telling the
+    /// browser's part of the shortcut's name from the rest. Empty in a
+    /// shortcut written before names could be chosen.
+    let browserNames: [String]
     let color: Int
+    /// The letters on the icon. Nil in a shortcut written before names
+    /// could be chosen.
+    let badge: String?
+    /// The icon's file in Resources, without ".icns".
+    let iconFile: String?
 
     /// Reads a shortcut back. Nil for an app that SuperSurfer did not write.
     init?(bundle: URL) {
@@ -395,15 +461,20 @@ struct ProfileShortcut {
               ProfileShortcutRules.isPlainName(directory) else {
             return nil
         }
+        let title = bundle.deletingPathExtension().lastPathComponent
         self.bundle = bundle
-        self.title = bundle.deletingPathExtension().lastPathComponent
+        self.title = title
+        self.nameInside = (info["CFBundleName"] as? String) ?? title
         self.browser = browser
         self.directory = directory
         self.profileName = (info[Key.profileName] as? String) ?? directory
         self.menuTitles = (info[Key.menuTitles] as? [String]) ?? []
         self.launchArguments = (info[Key.launchArguments] as? [String]) ?? []
         self.browserPath = browserPath
+        self.browserNames = (info[Key.browserNames] as? [String]) ?? []
         self.color = (info[Key.color] as? Int) ?? 0
+        self.badge = info[Key.badge] as? String
+        self.iconFile = info["CFBundleIconFile"] as? String
     }
 
     func isFor(browser: String, directory: String) -> Bool {
@@ -493,7 +564,9 @@ struct ProfileShortcut {
             Key.menuTitles: profile.menuTitles,
             Key.launchArguments: profile.launchArgs,
             Key.browserPath: browser.appPath,
+            Key.browserNames: [browser.shortName, browser.name],
             Key.color: color,
+            Key.badge: badge,
         ]
         // Without an icon of its own the shortcut still works, under the
         // icon macOS gives every app that has none.
@@ -514,6 +587,114 @@ struct ProfileShortcut {
             throw ShortcutError.notWritten(bundle.path)
         }
         return written
+    }
+
+    // MARK: A name of the user's choosing
+
+    /// What the browser is called, the short name first. A shortcut from
+    /// before names could be chosen did not note it. Its first name was the
+    /// browser's short name and the profile's, which gives the short name
+    /// back; failing that, the browser's app says what it is called.
+    var knownBrowserNames: [String] {
+        if !browserNames.isEmpty {
+            return browserNames
+        }
+        var names: [String] = []
+        let ending = " " + profileName
+        if nameInside.count > ending.count, nameInside.hasSuffix(ending) {
+            names.append(String(nameInside.dropLast(ending.count)))
+        }
+        names.append(URL(fileURLWithPath: browserPath).deletingPathExtension().lastPathComponent)
+        return names
+    }
+
+    /// The name it would have got from SuperSurfer, going by what is noted
+    /// in it.
+    var standardTitle: String {
+        return ProfileShortcutRules.title(browser: knownBrowserNames.first ?? "", profile: profileName)
+    }
+
+    /// The letters its icon should carry for the name it has now, among the
+    /// other shortcuts of its browser. `names` is what the browser is called.
+    func wantedBadge(among shortcuts: [ProfileShortcut], browserNames names: [String]) -> String {
+        let own = ProfileShortcutRules.label(of: title, browserNames: names)
+        let others = shortcuts
+            .filter { $0.browser == browser && $0.bundle.path != bundle.path }
+            .map { ProfileShortcutRules.label(of: $0.title, browserNames: names) }
+        return ProfileShortcutRules.badge(for: own, among: others)
+    }
+
+    /// Gives the app another name in the folder it is in. It is moved and
+    /// not written anew: it stays the file it was, so a Dock that holds it
+    /// finds it under the new name. Its inside still goes by the old name
+    /// afterwards, which is for `dressed` to change.
+    func renamed(to newTitle: String) throws -> ProfileShortcut {
+        let files = FileManager.default
+        let folder = bundle.deletingLastPathComponent()
+        let target = folder.appendingPathComponent("\(newTitle).app", isDirectory: true)
+        if newTitle.lowercased() == title.lowercased() {
+            // Only capitals differ. On a disk that does not tell them apart
+            // the new name is taken, by the app itself. It gets there by way
+            // of a name that nothing has.
+            let between = folder.appendingPathComponent(".\(UUID().uuidString).noindex", isDirectory: true)
+            try files.moveItem(at: bundle, to: between)
+            do {
+                try files.moveItem(at: between, to: target)
+            } catch {
+                try? files.moveItem(at: between, to: bundle)
+                throw error
+            }
+        } else {
+            guard !files.fileExists(atPath: target.path) else {
+                throw ShortcutError.nameTaken(newTitle)
+            }
+            try files.moveItem(at: bundle, to: target)
+        }
+        guard let moved = ProfileShortcut(bundle: target) else {
+            throw ShortcutError.notWritten(target.path)
+        }
+        return moved
+    }
+
+    /// Makes the inside of the app follow its name: the name in its
+    /// Info.plist and the letters on its icon. Nothing else about it
+    /// changes, and it stays the file it was.
+    func dressed(badge newBadge: String, browserNames names: [String], browserPath path: String? = nil) throws -> ProfileShortcut {
+        let files = FileManager.default
+        let contents = bundle.appendingPathComponent("Contents", isDirectory: true)
+        let resources = contents.appendingPathComponent("Resources", isDirectory: true)
+        let plistURL = contents.appendingPathComponent("Info.plist")
+        guard var info = NSDictionary(contentsOf: plistURL) as? [String: Any] else {
+            throw ShortcutError.gone(title)
+        }
+        info["CFBundleName"] = title
+        info["CFBundleDisplayName"] = title
+        info[Key.badge] = newBadge
+        if !names.isEmpty {
+            info[Key.browserNames] = names
+        }
+        // The picture goes under a file name of its own. One under the name
+        // of the old picture can be taken for the old picture by whatever
+        // has drawn that already.
+        var written: String?
+        if let icon = ShortcutIcon.icns(appPath: path ?? browserPath, badge: newBadge, color: color) {
+            try files.createDirectory(at: resources, withIntermediateDirectories: true)
+            let name = "\(ProfileShortcut.iconName)-\(UUID().uuidString.prefix(8))"
+            try icon.write(to: resources.appendingPathComponent("\(name).icns"))
+            info["CFBundleIconFile"] = name
+            written = name
+        }
+        let plist = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try plist.write(to: plistURL, options: .atomic)
+        if let new = written, let old = iconFile, old != new {
+            try? files.removeItem(at: resources.appendingPathComponent("\(old).icns"))
+        }
+        // The Finder and the Dock look again at an app that has changed.
+        try? files.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
+        guard let fresh = ProfileShortcut(bundle: bundle) else {
+            throw ShortcutError.gone(title)
+        }
+        return fresh
     }
 }
 
@@ -556,7 +737,7 @@ final class ProfileShortcuts {
         let reply = app.engine.shortcuts()
         let browsers = reply?.browsers ?? []
         let blocked = reply?.profilesBlocked ?? []
-        let existing = ProfileShortcut.all(in: ProfileShortcuts.folder)
+        let existing = dressedForTheirNames(ProfileShortcut.all(in: ProfileShortcuts.folder), browsers: browsers)
         let needsPermission = !existing.isEmpty && !AXIsProcessTrusted()
 
         var entries: [NSMenuItem] = [MenuItems.note(tr(
@@ -576,7 +757,11 @@ final class ProfileShortcuts {
                 let item: NSMenuItem
                 if let shortcut = existing.first(where: { $0.isFor(browser: browser.id, directory: profile.directory) }) {
                     listed.append(shortcut.bundle)
-                    item = shortcutItem(profile.name, shortcut, app: app)
+                    // The profile as the browser calls it, and the shortcut's
+                    // name next to it where someone chose another.
+                    let standard = ProfileShortcutRules.title(browser: browser.shortName, profile: profile.name)
+                    let shown = shortcut.title == standard ? profile.name : "\(profile.name) → \(shortcut.title)"
+                    item = shortcutItem(shown, shortcut, browser: browser.shortName, standard: standard, app: app)
                 } else {
                     item = ActionMenuItem(profile.name) { [weak self] in
                         self?.create(browser: browser, profile: profile, app: app)
@@ -610,7 +795,13 @@ final class ProfileShortcuts {
             entries.append(.separator())
             entries.append(MenuItems.note(tr("Profile not in the list any more", "Profil nicht mehr in der Liste")))
             for shortcut in unlisted {
-                let item = shortcutItem(shortcut.title, shortcut, app: app)
+                let item = shortcutItem(
+                    shortcut.title,
+                    shortcut,
+                    browser: shortcut.knownBrowserNames.first ?? "",
+                    standard: shortcut.standardTitle,
+                    app: app
+                )
                 item.indentationLevel = 2
                 entries.append(item)
             }
@@ -637,10 +828,21 @@ final class ProfileShortcuts {
         return MenuItems.submenu(needsPermission ? "⚠︎ " + title : title, items: entries)
     }
 
-    private func shortcutItem(_ title: String, _ shortcut: ProfileShortcut, app: AppDelegate) -> NSMenuItem {
+    /// `browser` is the browser's short name, and `standard` the name the
+    /// shortcut would have without a name of the user's choosing.
+    private func shortcutItem(
+        _ title: String,
+        _ shortcut: ProfileShortcut,
+        browser: String,
+        standard: String,
+        app: AppDelegate
+    ) -> NSMenuItem {
         let item = MenuItems.submenu(title, items: [
             ActionMenuItem(tr("Show in Finder", "Im Finder zeigen")) {
                 NSWorkspace.shared.activateFileViewerSelecting([shortcut.bundle])
+            },
+            ActionMenuItem(tr("Rename…", "Umbenennen …")) { [weak self] in
+                self?.askForName(of: shortcut, browser: browser, standard: standard, app: app)
             },
             ActionMenuItem(tr("Remove Shortcut", "Verknüpfung entfernen")) { [weak self] in
                 self?.remove(shortcut, app: app)
@@ -648,6 +850,86 @@ final class ProfileShortcuts {
         ])
         item.state = .on
         return item
+    }
+
+    // MARK: - A name of the user's choosing
+
+    /// What the browser of a shortcut is called: as the engine lists it now,
+    /// or else as the shortcut noted it.
+    private static func browserNames(of shortcut: ProfileShortcut, in browsers: [ShortcutBrowser]) -> [String] {
+        if let browser = browsers.first(where: { $0.id == shortcut.browser }) {
+            return [browser.shortName, browser.name]
+        }
+        return shortcut.knownBrowserNames
+    }
+
+    /// A shortcut's name is the name of its app, so it can be given in the
+    /// Finder as well as here. Where the inside of an app still goes by
+    /// another name, this makes it follow: the name in its Info.plist and
+    /// the letters on its icon. Returns the shortcuts as they are afterwards.
+    private func dressedForTheirNames(_ shortcuts: [ProfileShortcut], browsers: [ShortcutBrowser]) -> [ProfileShortcut] {
+        guard shortcuts.contains(where: { $0.title != $0.nameInside }) else {
+            return shortcuts
+        }
+        var current = shortcuts
+        for index in current.indices where current[index].title != current[index].nameInside {
+            let shortcut = current[index]
+            let names = ProfileShortcuts.browserNames(of: shortcut, in: browsers)
+            let badge = shortcut.wantedBadge(among: current, browserNames: names)
+            let path = browsers.first { $0.id == shortcut.browser }?.appPath
+            do {
+                current[index] = try shortcut.dressed(badge: badge, browserNames: names, browserPath: path)
+                LSRegisterURL(shortcut.bundle as CFURL, true)
+                ProfileShortcuts.trace(
+                    "\(shortcut.title): was \(shortcut.nameInside), its icon now carries \(badge)"
+                )
+            } catch {
+                // It keeps working under its old picture.
+                NSLog("SuperSurfer: %@: its icon could not be drawn again: %@", shortcut.title, error.localizedDescription)
+            }
+        }
+        return current
+    }
+
+    private func askForName(of shortcut: ProfileShortcut, browser: String, standard: String, app: AppDelegate) {
+        let example = ProfileShortcutRules.title(browser: browser, profile: "Work")
+        app.askForText(
+            title: tr("Rename “\(shortcut.title)”", "„\(shortcut.title)“ umbenennen"),
+            text: tr(
+                "This is what the shortcut is called in the Dock and the Finder. Its icon carries the first letter of the name, not counting the browser in front: W for “\(example)”.\n\nWhich profile it opens stays the same. Leave the field empty to go back to “\(standard)”.",
+                "So heißt die Verknüpfung im Dock und im Finder. Ihr Icon trägt den ersten Buchstaben des Namens, den Browser davor nicht mitgezählt: W bei „\(example)“.\n\nWelches Profil sie öffnet, bleibt gleich. Lass das Feld leer, um zu „\(standard)“ zurückzukehren."
+            ),
+            value: shortcut.title,
+            confirm: tr("Rename", "Umbenennen")
+        ) { [weak self] typed in
+            self?.rename(shortcut, to: typed, standard: standard, app: app)
+        }
+    }
+
+    private func rename(_ shortcut: ProfileShortcut, to typed: String, standard: String, app: AppDelegate) {
+        var name = ProfileShortcutRules.typedName(typed)
+        if name.isEmpty {
+            name = standard
+        }
+        do {
+            // The app may have been renamed or removed while the question
+            // was on screen.
+            guard var current = ProfileShortcut(bundle: shortcut.bundle) else {
+                throw ShortcutError.gone(shortcut.title)
+            }
+            if name != current.title {
+                current = try current.renamed(to: name)
+                ProfileShortcuts.trace("\(current.title): renamed, it was \(shortcut.title)")
+            }
+            let browsers = app.engine.shortcuts()?.browsers ?? []
+            _ = dressedForTheirNames(ProfileShortcut.all(in: ProfileShortcuts.folder), browsers: browsers)
+            LSRegisterURL(current.bundle as CFURL, true)
+        } catch {
+            app.showAlert(
+                title: tr("The shortcut could not be renamed", "Die Verknüpfung konnte nicht umbenannt werden"),
+                text: error.localizedDescription
+            )
+        }
     }
 
     private func create(browser: ShortcutBrowser, profile: ShortcutProfile, app: AppDelegate) {
@@ -732,7 +1014,16 @@ final class ProfileShortcuts {
         }
         // What the engine knows now comes first: a profile may have been
         // renamed since the shortcut was written.
-        let listed = engine.shortcuts()?.browsers?.first { $0.id == shortcut.browser }
+        let browsers = engine.shortcuts()?.browsers ?? []
+        if known.contains(where: { $0.title != $0.nameInside }) {
+            // A shortcut was renamed in the Finder. The click is not held up
+            // by that: the icons get their new letters on the main thread,
+            // where the menu would have seen to it as well.
+            DispatchQueue.main.async {
+                _ = self.dressedForTheirNames(ProfileShortcut.all(in: ProfileShortcuts.folder), browsers: browsers)
+            }
+        }
+        let listed = browsers.first { $0.id == shortcut.browser }
         let profile = listed?.profiles.first { $0.directory == shortcut.directory }
         let browserPath = listed?.appPath ?? shortcut.browserPath
         let titles = profile?.menuTitles ?? shortcut.menuTitles
@@ -918,6 +1209,28 @@ final class ProfileShortcuts {
             Rules.title(browser: "Edge", profile: " a/b:c \n d ") == "Edge a-b-c d"
         )
         check(
+            "dock shortcut: a typed name becomes a file name",
+            Rules.typedName("  Edge   Work.app ") == "Edge Work"
+                && Rules.typedName("Work.APP") == "Work"
+                && Rules.typedName("a/b:c") == "a-b-c"
+                && Rules.typedName(" \n ") == ""
+        )
+        let edgeNames = ["Edge", "Microsoft Edge"]
+        check(
+            "dock shortcut: the name without the browser in front",
+            Rules.label(of: "Edge Work", browserNames: edgeNames) == "Work"
+                && Rules.label(of: "microsoft edge  Personal", browserNames: edgeNames) == "Personal"
+                && Rules.label(of: "Work", browserNames: edgeNames) == "Work"
+                && Rules.label(of: "Edge", browserNames: edgeNames) == "Edge"
+                && Rules.label(of: "Edgewise", browserNames: edgeNames) == "Edgewise"
+                && Rules.label(of: "Edge Beta Dev", browserNames: ["Edge Beta", "Microsoft Edge Beta"]) == "Dev"
+        )
+        check(
+            "dock shortcut: letters for a name of the user's choosing",
+            Rules.badge(for: Rules.label(of: "Edge Work", browserNames: edgeNames), among: ["Personal"]) == "W"
+                && Rules.badge(for: Rules.label(of: "Edge Personal", browserNames: edgeNames), among: ["Work"]) == "P"
+        )
+        check(
             "dock shortcut: an identifier of its own",
             Rules.bundleIdentifier(browser: "edge-beta", directory: "Profile 1")
                 == "dev.supersurfer.shortcut.edge-beta.Profile-1"
@@ -1053,6 +1366,68 @@ final class ProfileShortcuts {
             check(
                 "dock shortcut: written again it takes the place of the old one",
                 all.count == 2 && again.color == first.color && all.map { $0.title } == ["Edge Work", "Edge Work (Profile 2)"]
+            )
+            check(
+                "dock shortcut: it notes its letters and what the browser is called",
+                again.badge == "W" && again.browserNames == ["Edge", "Microsoft Edge"]
+                    && again.nameInside == "Edge Work" && again.standardTitle == "Edge Work"
+            )
+
+            // A name of the user's choosing. The app has to stay the file it
+            // is, or a Dock that holds it would lose it.
+            func fileNumber(_ url: URL) -> Int? {
+                return (try? FileManager.default.attributesOfItem(atPath: url.path))?[.systemFileNumber] as? Int
+            }
+            func exists(_ url: URL) -> Bool {
+                return FileManager.default.fileExists(atPath: url.path)
+            }
+            let before = fileNumber(again.bundle)
+            let moved = try again.renamed(to: "Edge Büro")
+            check(
+                "dock shortcut: renamed it is the same app under another name",
+                moved.title == "Edge Büro" && moved.nameInside == "Edge Work"
+                    && before != nil && fileNumber(moved.bundle) == before
+                    && !exists(again.bundle)
+                    && moved.isFor(browser: "edge", directory: "Profile 1")
+            )
+            let badge = moved.wantedBadge(among: ProfileShortcut.all(in: folder), browserNames: edgeNames)
+            let dressed = try moved.dressed(badge: badge, browserNames: edgeNames)
+            let dressedInfo = NSDictionary(contentsOf: dressed.bundle.appendingPathComponent("Contents/Info.plist"))
+            let resources = dressed.bundle.appendingPathComponent("Contents/Resources")
+            check(
+                "dock shortcut: and its inside follows the name",
+                badge == "B" && dressed.badge == "B" && dressed.nameInside == "Edge Büro"
+                    && dressedInfo?["CFBundleName"] as? String == "Edge Büro"
+                    && dressedInfo?["CFBundleExecutable"] as? String == "shortcut"
+                    && dressedInfo?["LSUIElement"] as? Bool == true
+                    && fileNumber(dressed.bundle) == before
+                    && dressed.color == again.color && dressed.launchArguments == again.launchArguments
+            )
+            check(
+                "dock shortcut: with its picture under a new file name",
+                dressed.iconFile != nil && dressed.iconFile != "shortcut"
+                    && dressed.iconFile.map { exists(resources.appendingPathComponent("\($0).icns")) } == true
+                    && !exists(resources.appendingPathComponent("shortcut.icns"))
+            )
+            check(
+                "dock shortcut: a name another app has is refused",
+                (try? dressed.renamed(to: "Edge Work (Profile 2)")) == nil && exists(dressed.bundle)
+            )
+            let capitals = try dressed.renamed(to: "edge büro")
+            check(
+                "dock shortcut: a change of capitals alone is a rename too",
+                capitals.title == "edge büro" && fileNumber(capitals.bundle) == before
+            )
+
+            // Renamed in the Finder: the name of the app is the name, and
+            // the inside is made to follow when the menu looks.
+            try FileManager.default.moveItem(at: second.bundle, to: folder.appendingPathComponent("Edge Privat.app"))
+            let taken = ProfileShortcuts.shared.dressedForTheirNames(ProfileShortcut.all(in: folder), browsers: [edge])
+            let privat = taken.first { $0.isFor(browser: "edge", directory: "Profile 2") }
+            check(
+                "dock shortcut: a name given in the Finder is taken up",
+                taken.count == 2 && privat?.title == "Edge Privat" && privat?.nameInside == "Edge Privat"
+                    && privat?.badge == "P" && privat?.color == second.color
             )
         } catch {
             check("dock shortcut: could be written (\(error.localizedDescription))", false)

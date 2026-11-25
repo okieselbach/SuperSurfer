@@ -85,6 +85,15 @@ struct AlertAction {
     let run: () -> Void
 }
 
+/// A question that is answered with one line of text.
+struct TextQuestion {
+    let title: String
+    let text: String
+    let value: String
+    let confirm: String
+    let then: (String) -> Void
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let recentLimit = 10
 
@@ -104,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingPickers: [Decision] = []
     private var pickerMenu: NSMenu?
     private var pendingAlerts: [(title: String, text: String, action: AlertAction?)] = []
+    private var pendingQuestions: [TextQuestion] = []
     private var activity: NSObjectProtocol?
 
     // MARK: - Lifecycle
@@ -468,6 +478,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingAlerts.append((title: title, text: text, action: action))
         if pendingAlerts.count == 1 {
             perform(#selector(showPendingAlert), with: nil, afterDelay: 0)
+        }
+    }
+
+    /// Asks for one line of text and hands it to `then`, unless the question
+    /// was cancelled. It starts from the run loop like `showAlert`, so no
+    /// link waits for the answer.
+    func askForText(title: String, text: String, value: String, confirm: String, then: @escaping (String) -> Void) {
+        pendingQuestions.append(TextQuestion(title: title, text: text, value: value, confirm: confirm, then: then))
+        if pendingQuestions.count == 1 {
+            perform(#selector(showPendingQuestion), with: nil, afterDelay: 0)
+        }
+    }
+
+    @objc private func showPendingQuestion() {
+        guard let question = pendingQuestions.first else {
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = question.title
+        alert.informativeText = question.text
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = question.value
+        alert.accessoryView = field
+        // The first button is the default one and answers Return.
+        alert.addButton(withTitle: question.confirm)
+        alert.addButton(withTitle: tr("Cancel", "Abbrechen")).keyEquivalent = "\u{1b}"
+        // The name is there to be typed over.
+        alert.window.initialFirstResponder = field
+        let response = alert.runModal()
+
+        pendingQuestions.removeFirst()
+        if response == .alertFirstButtonReturn {
+            question.then(field.stringValue)
+        }
+        if !pendingQuestions.isEmpty {
+            perform(#selector(showPendingQuestion), with: nil, afterDelay: 0)
         }
     }
 
