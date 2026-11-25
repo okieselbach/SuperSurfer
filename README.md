@@ -327,6 +327,8 @@ Note: if your shell aliases `open` to `xdg-open`, use the full app path above â€
 
 The bundle holds one executable. The macOS side (URL events, menu bar, picker, launching through `NSWorkspace`) is Swift in `packaging/macos/app/`; the Rust core is linked into it as a static library and reached through a three-function C interface (`src/ffi.rs`, JSON in and out). `build-app.sh` builds both with `cargo` and `swiftc` â€” no Xcode project.
 
+The app's icon is drawn by `packaging/macos/icon/make-icon.py` (Python with Pillow and numpy) into `packaging/macos/AppIcon.iconset`, one picture per size. Those pictures are in the repository, and `build-app.sh` packs them with `iconutil`, so the script only has to run when the icon is to change. Its glyph, a link that fans out to the browsers, is drawn from dots and curves. It is not the branching arrow of the menu bar: that is one of Apple's SF Symbols, which may be used in an app's interface and not in its icon.
+
 The same executable is the command line. Started by Launch Services it becomes the menu bar app; started from a shell it runs the given command and exits. Two flags are for development:
 
 ```bash

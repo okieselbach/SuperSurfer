@@ -157,6 +157,7 @@ jobs:
         run: |
           test -x dist/SuperSurfer.app/Contents/MacOS/SuperSurfer
           test -x dist/SuperSurfer.app/Contents/MacOS/set-default
+          test -s dist/SuperSurfer.app/Contents/Resources/AppIcon.icns
 
       # Starts the built app, sends it a link the way macOS does, and checks
       # that it routed it and stayed loaded.

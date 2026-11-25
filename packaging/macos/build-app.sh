@@ -45,6 +45,11 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$APP/Contents/Resources"
 cp packaging/macos/Info.plist "$APP/Contents/Info.plist"
 
+# The app's icon. Its pictures, one per size, are drawn by
+# packaging/macos/icon/make-icon.py and kept in the repository. iconutil
+# packs them into the one file that Info.plist names.
+iconutil -c icns packaging/macos/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+
 echo "Compiling SuperSurfer.app..."
 # NATIVE_LIBS is a list of linker flags and must be split into words.
 # shellcheck disable=SC2086
