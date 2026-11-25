@@ -97,6 +97,8 @@ On macOS SuperSurfer stays loaded once it has been started — by `register`, by
 
 Staying loaded is what makes a click fast. `config.js` is already evaluated and the browser list is in memory, so a link costs a fraction of a millisecond of routing instead of an app launch plus two helper processes. The browser is started in-process through `NSWorkspace`, the same Launch Services path `open` uses. `config.js` and `rules.json` are checked for changes when a link arrives (two `stat` calls), not polled, so the app does nothing at all while idle.
 
+That path has a weak spot. Launch Services takes what one app asks it to open one request at a time, and keeps each until it can say how the start went. With a browser that is running, or starts as usual, that is quick: on GitHub's runners Safari took hundredths to tenths of a second when it was running, and one to three seconds when it had to start. Until then every later link waits, whichever browser it is for, and a browser that does not get through its start keeps them waiting. On the macOS 15 runner, where no browser has been run before, that happened when SuperSurfer started them: Chrome went 40 seconds without an answer and without a window in both runs that waited for it, and Edge went 40 seconds without an answer in one run and got through its start in others. Twice Edge was quit seven seconds into such a start. Two minutes later there was still no answer, and a start of Chrome that SuperSurfer asked for in between did not happen. If links stop opening, look for a browser that has not got through its start and help it along, for instance by answering what it asks. If that does not bring the links back, quit SuperSurfer and open it again: the waiting is done in SuperSurfer's own process, and a new one starts without it.
+
 The menu:
 
 | Item | What it does |
@@ -126,6 +128,10 @@ Hold the picker key (⌥ Option by default) while clicking a link and a menu ope
 - **Copy Cleaned Link** — the destination without redirect wrapper and tracking parameters.
 
 Escape closes the menu and the link is not opened. Without the key, nothing ever asks: links follow `config.js`, then the saved rules, then `defaultBrowser`.
+
+**What a profile is called.** The picker lists a profile under the name the browser has for it. If you gave the profile's [Dock shortcut](#dock-shortcuts) a name of your own, it is listed under that one instead, without the browser in front: *Work* for a shortcut called "Edge Work", where Edge says *Oliver*. **Recent Links** and **Saved Rules** say it the same way. Rest the pointer on such an entry and it shows what the browser calls the profile. That is still the name for `config.js`, and the one `rules.json` keeps.
+
+`config.js` may also name a profile by its folder (`"edge:Profile 1"`). The line at the top of the picker then names the profile and not the folder, and the checkmark is at that profile. The two are easy to mix up: Edge calls its second profile "Profile 2" and keeps it in the folder "Profile 1".
 
 Some apps use ⌥-click themselves (browsers download the link target). Pick another key in the menu if that gets in the way.
 
@@ -182,7 +188,9 @@ Like Dock Click this has nothing to do with routing links, and none of it runs u
 - choose the profile under **Dock Shortcuts**, then **Rename…**, or
 - rename the app in the Finder. SuperSurfer takes the name up the next time its menu opens or the shortcut is clicked.
 
-The icon then carries the first letter of the name, not counting the browser in front: W for "Edge Work". The name is only a name. Which profile the shortcut opens is noted inside it and stays the same, and the menu goes on listing the profile as the browser calls it, with the shortcut's name behind an arrow: *Oliver → Edge Work*. An empty name in **Rename…** goes back to the first one.
+The icon then carries the first letter of the name, not counting the browser in front: W for "Edge Work". The name is only a name. Which profile the shortcut opens is noted inside it and stays the same. Under **Dock Shortcuts** the menu goes on listing the profile as the browser calls it, with the shortcut's name behind an arrow: *Oliver → Edge Work*. An empty name in **Rename…** goes back to the first one.
+
+The name is also what the rest of SuperSurfer's menu calls the profile from then on: the [picker](#picker), **Recent Links** and **Saved Rules** say *Work*. Two things limit that. A name that another profile of the browser already goes by, or that two shortcuts of the browser share, is not used, because two entries of one list would read alike. And `config.js` and `rules.json` know nothing of it: there a profile has the name the browser gives it, or its folder.
 
 A shortcut that is in the Dock stays there when it is renamed. The Dock goes on showing the old name until the shortcut is clicked the next time. The new picture was there within seconds on macOS 26, and after that click on macOS 15.
 
@@ -207,7 +215,7 @@ The same command shows it when a shortcut could not reach SuperSurfer at all, fo
 
 **Which browsers.** Edge and Chrome. Their Beta and Canary builds and Chromium have the same menu and are offered as well, untried. Firefox is not offered: it runs every profile as an app of its own, which has its own Dock icon while it runs. Safari is not offered either: its profiles cannot be reached from outside.
 
-**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It renames one of them in the menu while it is in the Dock and one the way the Finder does, and goes on with both. It runs in CI on macOS 15 and has passed on GitHub's macOS 26 runner. Not tested: profiles that are signed in to an account (the rule for their names follows Chromium's source and is checked against made-up data; what Edge does with a Microsoft account is not known), a browser in another language, the Beta and Canary builds, and macOS 27. Whether the Dock draws the new picture of a shortcut that was renamed in the Finder before SuperSurfer could take the name up, and so changes its picture without changing its name, has not been looked at either.
+**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It renames one of them in the menu while it is in the Dock and one the way the Finder does, and goes on with both. It then opens the picker for links with a saved rule and reads what the picker and **Saved Rules** call the profiles. With Chrome, as its last step, it also chooses a profile in the picker under its shortcut's name, and looks at which profile Chrome is started with and what **Recent Links** calls it. That is done once and last because it has SuperSurfer start a browser a second time, and a runner's browsers do not get through their start, which holds up whatever SuperSurfer asks macOS for next (see [Menu bar app](#menu-bar-app-macos)). With Edge the same passed in two runs. It runs in CI on macOS 15. As it was before the steps on the picker, it has also passed on GitHub's macOS 26 runner. Not tested: profiles that are signed in to an account (the rule for their names follows Chromium's source and is checked against made-up data; what Edge does with a Microsoft account is not known), a browser in another language, the Beta and Canary builds, and macOS 27. Whether the Dock draws the new picture of a shortcut that was renamed in the Finder before SuperSurfer could take the name up, and so changes its picture without changing its name, has not been looked at either.
 
 ## Saved rules (`rules.json`)
 
@@ -415,7 +423,7 @@ supersurfer doctor
 Bump the version in `Cargo.toml`, `Cargo.lock` and `packaging/macos/Info.plist`, merge to `main`, then publish in one of three ways. Each ends in the same CI run, which builds every platform and attaches the binaries:
 
 - **From the Actions page:** CI → Run workflow → branch `main`, tick *Publish a GitHub release*. This creates the tag `v<version>` and the release.
-- **With a tag:** `git tag v0.3.2 && git push origin v0.3.2`.
+- **With a tag:** `git tag v0.3.3 && git push origin v0.3.3`.
 - **From the Releases page:** create a release with a new tag `v<version>` on `main`. CI adds the binaries a few minutes later, and the notes if you left them empty.
 
 ## Architecture

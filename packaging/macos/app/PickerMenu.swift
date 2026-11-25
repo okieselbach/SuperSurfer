@@ -7,15 +7,18 @@ import Cocoa
 /// happened, needs no focus change, handles arrow keys, type-to-select and
 /// Escape by itself, and costs nothing while it is not showing.
 enum PickerMenu {
-    static func make(app: AppDelegate, decision: Decision, browsers: [BrowserInfo]) -> NSMenu {
+    /// `names` says what a profile is called here: by the name of its Dock
+    /// shortcut where the user chose one.
+    static func make(app: AppDelegate, decision: Decision, browsers: [BrowserInfo], names: ProfileNames) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(MenuItems.note(Format.shortURL(decision.routedUrl)))
-        menu.addItem(MenuItems.note(usualRoute(decision)))
+        menu.addItem(MenuItems.note(usualRoute(decision, names: names)))
         menu.addItem(.separator())
 
         // The browser the rules would have used carries the checkmark.
         let once = MenuItems.browsers(
             browsers,
+            names: names,
             checkedBrowserId: decision.browserId,
             checkedProfile: decision.profile
         ) { browser, profile in
@@ -40,7 +43,7 @@ enum PickerMenu {
                 )))
                 entries.append(.separator())
             }
-            let always = MenuItems.browsers(browsers) { browser, profile in
+            let always = MenuItems.browsers(browsers, names: names) { browser, profile in
                 app.open(decision, in: browser, profile: profile, rememberFor: host)
             }
             entries.append(contentsOf: always)
@@ -61,8 +64,10 @@ enum PickerMenu {
         return menu
     }
 
-    private static func usualRoute(_ decision: Decision) -> String {
-        let target = Format.browserLabel(decision.browser, profile: decision.profile)
+    private static func usualRoute(_ decision: Decision, names: ProfileNames) -> String {
+        // config.js may name a profile by its folder. The line says it the
+        // way the list below does.
+        let target = names.label(decision.target)
         switch decision.source {
         case "handler":
             return tr("config.js opens this in \(target)", "config.js öffnet das in \(target)")

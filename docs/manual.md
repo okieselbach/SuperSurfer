@@ -114,6 +114,8 @@ Changes to `config.js` take effect with the next link; there is nothing to resta
 
 Hold ⌥ Option while clicking a link. A menu opens at the pointer with your browsers and profiles; the one your rules would have used has a checkmark. Choose one to open the link there this once, or use **Always Open _site_ in** to also save a rule for the site. Escape cancels and the link is not opened.
 
+A profile is listed under the name the browser has for it. If you gave its [Dock shortcut](#dock-shortcuts) a name of your own, it is listed under that one, without the browser in front: *Work* for "Edge Work". **Recent Links** and **Saved Rules** do the same. Rest the pointer on the entry to see what the browser calls the profile, which is the name `config.js` needs.
+
 Without the key nothing asks: links follow `config.js`, then the saved rules, then `defaultBrowser`.
 
 ### Browser profiles on macOS 27 and later
@@ -169,7 +171,7 @@ A click on it brings the window of that profile to the front. If the profile has
 - The first time, macOS asks for the Accessibility permission: System Settings → Privacy & Security → **Accessibility**, switch on SuperSurfer. Without it every click opens a new window instead of bringing the one that is there forward, and the menu entry shows ⚠︎.
 - The shortcut is an extra icon, not the browser. While the browser runs, its own icon is in the Dock as well.
 - To get rid of a shortcut, choose its profile under **Dock Shortcuts** again and then **Remove Shortcut**. The Dock keeps a question mark where it was; drag that out.
-- To call a shortcut what you call the profile, choose its profile under **Dock Shortcuts** and then **Rename…**, or rename the app in the Finder. Its icon gets the first letter of the new name, not counting the browser in front: W for "Edge Work". Which profile it opens stays the same. The menu lists the profile as the browser calls it, with the shortcut's name behind an arrow.
+- To call a shortcut what you call the profile, choose its profile under **Dock Shortcuts** and then **Rename…**, or rename the app in the Finder. Its icon gets the first letter of the new name, not counting the browser in front: W for "Edge Work". Which profile it opens stays the same. Under **Dock Shortcuts** the menu lists the profile as the browser calls it, with the shortcut's name behind an arrow. Everywhere else, and in the menu that [chooses a browser for one link](#choosing-a-browser-for-one-link), the profile then goes by the name you gave: *Work*. In `config.js` it keeps the name the browser has for it.
 - A renamed shortcut stays in the Dock. The Dock shows the new name, and on older systems the new picture, once the shortcut has been clicked again.
 - A shortcut keeps working when its profile is renamed in the browser.
 
@@ -216,6 +218,8 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 **No menu bar icon (macOS)** — start the app with `open -a SuperSurfer`. If the icon was dragged out of the menu bar, this also brings it back.
 
 **The picker does not appear (macOS)** — the app the link is in may use ⌥-click itself. Choose another **Picker Key** in the menu.
+
+**No link opens any more, in any browser (macOS)** — macOS takes what SuperSurfer asks it to open one request at a time, and each waits until macOS can say how the start of the browser went. A browser that does not get through its start, for instance one that is waiting with a question before its first window, holds up everything behind it. Answer its question. If links still do not open, quit SuperSurfer and open it again. This was seen with Edge and Chrome on a test machine, not on a Mac in use; the [README](../README.md#menu-bar-app-macos) has what was seen.
 
 **A saved rule is ignored** — a `handlers` entry in `config.js` matches the same link and comes first. `supersurfer test <url>` prints a `rule:` line when a saved rule decided.
 

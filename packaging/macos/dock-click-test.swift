@@ -983,6 +983,42 @@ struct TestBrowser {
     let bundleID: String
     /// Where it keeps its profiles, below Library/Application Support.
     let dataFolder: String
+    /// Whether the test goes on to choose one of this browser's profiles
+    /// in the picker, which has SuperSurfer start the browser a second
+    /// time. Only for the browser that dock-shortcut-test.sh runs last,
+    /// and it is the last thing the test asks SuperSurfer for.
+    ///
+    /// The reason is in what a runner's browsers do. Launch Services hands
+    /// on what one app asks it to open one request at a time, and each
+    /// waits until the browser has answered, which is when it has finished
+    /// starting. On GitHub's macOS 15 runner, where no browser has ever
+    /// been run, a browser that SuperSurfer starts does not get that far:
+    /// Chrome was there for 40 s without a window (runs 66 and 67), and
+    /// Edge for 40 s as well (run 65), unless the file that says its first
+    /// run is behind it was put there before (run 67). Until the answer
+    /// comes, nothing SuperSurfer asks macOS for after it happens.
+    ///
+    /// What has been seen of the answer there:
+    ///
+    /// - It came, as "started", when the browser got through its start:
+    ///   Edge in runs 67 and 69 and in some before.
+    /// - It came five to six seconds after the start, as "could not be
+    ///   launched", when the browser was gone again by then: Edge in runs
+    ///   63, 64, 66 and 68, Chrome in runs 68 and 69.
+    /// - It did not come while a browser was there without getting through
+    ///   its start: Edge for 40 s in run 65, Chrome for 40 s in runs 66
+    ///   and 67.
+    /// - It did not come for Edge's second start in runs 63 and 64 either,
+    ///   which was quit seven seconds after the start. Two minutes later
+    ///   there was still no answer, and Chrome, which SuperSurfer was
+    ///   asked for in between, never came.
+    ///
+    /// So a browser that SuperSurfer started is asked to quit two seconds
+    /// after it was seen, which is three seconds after its start. That is
+    /// what the test has always done, and both browsers went at once then.
+    /// Asked half a second after it was seen, in run 69, Edge took more
+    /// than ten seconds to go.
+    let chosenInPicker: Bool
 }
 
 let testBrowsers = [
@@ -993,7 +1029,8 @@ let testBrowsers = [
         appPath: "/Applications/Microsoft Edge.app",
         binary: "Microsoft Edge",
         bundleID: "com.microsoft.edgemac",
-        dataFolder: "Microsoft Edge"
+        dataFolder: "Microsoft Edge",
+        chosenInPicker: false
     ),
     TestBrowser(
         id: "chrome",
@@ -1002,7 +1039,8 @@ let testBrowsers = [
         appPath: "/Applications/Google Chrome.app",
         binary: "Google Chrome",
         bundleID: "com.google.Chrome",
-        dataFolder: "Google/Chrome"
+        dataFolder: "Google/Chrome",
+        chosenInPicker: true
     ),
 ]
 
@@ -1232,6 +1270,141 @@ func chooseInDockShortcuts(_ steps: [([AXUIElement]) -> AXUIElement?], what: Str
     stop("SuperSurfer's menu has no \(what) under Dock Shortcuts")
 }
 
+// MARK: - A browser that does not come
+
+/// The processes of an app's own program, its helpers left out, as `ps`
+/// lists them: number, how long it has been running, and what it was
+/// started with.
+func mainProcesses(of binary: String) -> [String] {
+    return outputOf("/bin/ps", ["-axww", "-o", "pid=,etime=,args="])
+        .components(separatedBy: "\n")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { $0.contains("/Contents/MacOS/\(binary)") && !$0.contains("--type=") && !$0.contains("Helper") }
+}
+
+/// Where SuperSurfer's threads are, cut down to the lines that name a
+/// thread or have to do with starting an app. For a start that SuperSurfer
+/// asked macOS for and that did not come.
+func superSurferThreads() -> [String] {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.supersurfer.app").first else {
+        return ["SuperSurfer is not running"]
+    }
+    let file = NSTemporaryDirectory() + "supersurfer-sample-\(UUID().uuidString).txt"
+    _ = outputOf("/usr/bin/sample", ["\(app.processIdentifier)", "1", "-file", file])
+    defer { try? FileManager.default.removeItem(atPath: file) }
+    let report = (try? String(contentsOfFile: file, encoding: .utf8)) ?? ""
+    let telling = ["Thread_", "LSOpen", "_LS", "NSWorkspace", "LaunchServices", "xpc_connection_send", "openApplication"]
+    let lines = report.components(separatedBy: "\n")
+        .filter { line in telling.contains { line.contains($0) } }
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+    return lines.isEmpty ? ["no sample could be taken"] : Array(lines.prefix(70))
+}
+
+// MARK: - The picker
+
+/// What is at a point of the screen, if it is SuperSurfer's.
+func superSurferElement(at point: CGPoint) -> AXUIElement? {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.supersurfer.app").first else {
+        return nil
+    }
+    var hit: AXUIElement?
+    let asked = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit)
+    guard asked == .success, let element = hit else {
+        return nil
+    }
+    var owner: pid_t = 0
+    guard AXUIElementGetPid(element, &owner) == .success, owner == app.processIdentifier else {
+        return nil
+    }
+    return element
+}
+
+/// Points just beside the pointer. The picker opens with a corner at the
+/// pointer: to the right of it and below, or to the other side where the
+/// screen ends.
+func besideThePointer() -> [CGPoint] {
+    guard let pointer = CGEvent(source: nil)?.location else {
+        return []
+    }
+    let steps: [CGPoint] = [CGPoint(x: 12, y: 12), CGPoint(x: -12, y: 12), CGPoint(x: 12, y: -12), CGPoint(x: -12, y: -12)]
+    return steps.map { CGPoint(x: pointer.x + $0.x, y: pointer.y + $0.y) }
+}
+
+/// The entries of the menu SuperSurfer has up at the pointer. None while
+/// there is no such menu.
+func pickerEntries() -> [AXUIElement] {
+    for point in besideThePointer() {
+        guard var element = superSurferElement(at: point) else {
+            continue
+        }
+        // From the entry at that point up to the menu it is in.
+        for _ in 0..<4 {
+            if text(element, kAXRoleAttribute) == "AXMenu" {
+                return elements(element, kAXChildrenAttribute)
+            }
+            guard let parent = value(element, kAXParentAttribute) else {
+                break
+            }
+            element = parent as! AXUIElement
+        }
+    }
+    return []
+}
+
+func entryTitles(_ entries: [AXUIElement]) -> [String] {
+    return entries.map { text($0, kAXTitleAttribute) ?? "" }
+}
+
+/// Has SuperSurfer show its picker for a link, by way of the clipboard and
+/// the entry its menu has for that, and returns the picker's entries. `mark`
+/// is a part of the link that the first line of the picker shows.
+func openPicker(for link: String, showing mark: String) -> [AXUIElement] {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(link, forType: .string)
+    pause(0.3)
+    let entry = entryTitled(["Choose Browser for Copied Link…", "Browser für kopierten Link wählen …"])
+    guard clickDownMenu([entry]) else {
+        stop("SuperSurfer's menu has no entry that opens the picker")
+    }
+    var entries: [AXUIElement] = []
+    let up = waitUntil(10) {
+        entries = pickerEntries()
+        return (entryTitles(entries).first ?? "").contains(mark)
+    }
+    guard up else {
+        let found = besideThePointer().map { point -> String in
+            guard let element = superSurferElement(at: point) else {
+                return "nothing of SuperSurfer's"
+            }
+            return "\(text(element, kAXRoleAttribute) ?? "?") \"\(text(element, kAXTitleAttribute) ?? "")\""
+        }
+        let own = elements(superSurfer(), kAXChildrenAttribute).map { text($0, kAXRoleAttribute) ?? "?" }
+        for _ in 1...3 {
+            pressEscape()
+        }
+        stop("the picker did not open for \(link). Beside the pointer: \(found). SuperSurfer itself has: \(own)")
+    }
+    return entries
+}
+
+/// Closes the picker without a choice, which opens nothing.
+func closePicker(showing mark: String) {
+    pressEscape()
+    let gone = waitUntil(5) { !(entryTitles(pickerEntries()).first ?? "").contains(mark) }
+    if !gone {
+        stop("the picker did not close")
+    }
+}
+
+/// The entries the picker has for the profiles of a browser: as many as the
+/// browser has profiles, right below the entry for the browser itself.
+func profileBlock(_ entries: [AXUIElement], below browser: String, count: Int) -> [AXUIElement] {
+    guard count > 0, let header = entryTitles(entries).firstIndex(of: browser), header + count < entries.count else {
+        return []
+    }
+    return Array(entries[(header + 1)...(header + count)])
+}
+
 func testShortcuts(
     _ browser: TestBrowser,
     home: String,
@@ -1265,6 +1438,47 @@ func testShortcuts(
             _ = waitUntil(10) { running() == nil }
         }
         pause(1)
+        // What macOS lists as apps is not all there can be: a browser that
+        // was asked to quit while it was still starting may be in neither
+        // state. Whatever is still there three seconds on is put down.
+        if !waitUntil(3, { mainProcesses(of: browser.binary).isEmpty }) {
+            say("      after it was quit, \(browser.name) still has: \(mainProcesses(of: browser.binary))")
+        }
+    }
+    /// How many starts of a browser macOS has answered SuperSurfer, going
+    /// by its trace: for a link, and for a shortcut.
+    func answeredStarts() -> Int {
+        let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n")
+            .filter { $0.contains("accepted it after") || $0.contains("was started with the profile") }
+            .count
+    }
+    /// What there is to see when a start that SuperSurfer asked macOS for
+    /// did not come.
+    func whyNoStart() {
+        for other in testBrowsers {
+            say("      \(other.name), its own processes: \(mainProcesses(of: other.binary))")
+        }
+        let windows = running().map { axWindows($0).map { text($0, kAXTitleAttribute) ?? "?" } } ?? []
+        say("      \(browser.name), its windows: \(windows)")
+        say("      starts macOS has answered so far: \(answeredStarts())")
+        say("      SuperSurfer's threads:")
+        for line in superSurferThreads() {
+            say("        \(line)")
+        }
+    }
+    /// Waits until macOS has answered SuperSurfer a start it asked for,
+    /// once the browser has been quit again. `before` is what
+    /// `answeredStarts` said before the start was asked for. Until that
+    /// answer is there SuperSurfer can start nothing else; see
+    /// `TestBrowser.chosenInPicker`.
+    func awaitAnswer(since before: Int) {
+        let began = Date()
+        guard waitUntil(40, { answeredStarts() > before }) else {
+            whyNoStart()
+            stop("macOS has not answered the start of \(browser.name) 40 s after \(browser.name) was quit")
+        }
+        say(String(format: "      macOS answered that start %.1f s after the browser was quit", Date().timeIntervalSince(began)))
     }
 
     // Three profiles, each with one window that shows a page of its own. The
@@ -1361,6 +1575,23 @@ func testShortcuts(
     /// is renamed, and a file written anew gets another.
     func fileNumber(_ path: String) -> Int? {
         return (try? FileManager.default.attributesOfItem(atPath: path))?[.systemFileNumber] as? Int
+    }
+    /// What SuperSurfer's menus are to call a profile whose shortcut got a
+    /// name of the user's choosing, by the profile's folder: that name
+    /// without the browser in front.
+    var chosenNames: [String: String] = [:]
+    /// What they are to call a profile that is named as `given`. SuperSurfer
+    /// looks for a profile of that name first, and for one in a folder of
+    /// that name after.
+    func shown(_ given: String) -> String {
+        var folder = names.first(where: { $0.value == given })?.key
+        if folder == nil, names[given] != nil {
+            folder = given
+        }
+        guard let found = folder else {
+            return given
+        }
+        return chosenNames[found] ?? names[found] ?? given
     }
 
     say("-- a shortcut is made in SuperSurfer's menu")
@@ -1567,6 +1798,77 @@ func testShortcuts(
         inFront("sst-second")
     }
 
+    say("-- the picker calls a profile what its shortcut is called")
+    chosenNames = ["Profile 1": "Work", "Profile 2": "Privat"]
+    // Three sites with a saved rule each. The first names the profile the
+    // way the browser does, which is what the picker saves. The others name
+    // a folder, as config.js may: the folder of the profile that has no
+    // shortcut, and the folder "Profile 2". Chrome calls the profile in
+    // that folder "Person 2". Edge calls it "Profile 3", and "Profile 2" is
+    // what Edge calls the profile in the folder "Profile 1". SuperSurfer
+    // goes by the name before the folder, so in Edge that rule means the
+    // second profile.
+    let ruled = [("sst-name.example", second), ("sst-first.example", "Default"), ("sst-folder.example", "Profile 2")]
+    let savedRules: [String: Any] = [
+        "version": 1,
+        "rules": ruled.map { ["domain": $0.0, "browser": browser.id, "profile": $0.1] },
+    ]
+    do {
+        let file = URL(fileURLWithPath: home + "/Library/Application Support/SuperSurfer/rules.json")
+        try JSONSerialization.data(withJSONObject: savedRules).write(to: file)
+    } catch {
+        stop("rules.json could not be written: \(error.localizedDescription)")
+    }
+    let inOrder = names.values.map { shown($0) }.sorted { $0.lowercased() < $1.lowercased() }
+    for (domain, profile) in ruled {
+        let entries = openPicker(for: "https://\(domain)/page", showing: domain)
+        // Read while the picker is up: its entries are gone with it.
+        let all = entryTitles(entries)
+        let block = profileBlock(entries, below: browser.name, count: names.count)
+        let below = entryTitles(block)
+        let checked = block
+            .filter { !(text($0, "AXMenuItemMarkChar") ?? "").isEmpty }
+            .map { text($0, kAXTitleAttribute) ?? "" }
+        closePicker(showing: domain)
+        let wanted = shown(profile)
+        let line = all.count > 1 ? all[1] : ""
+        guard below == inOrder else {
+            stop("below \(browser.name) the picker lists \(below) and not \(inOrder). All of it: \(all)")
+        }
+        guard line.hasSuffix("\(browser.name) (\(wanted))") else {
+            stop("for a rule that names \"\(profile)\" the picker says \"\(line)\" and not \(browser.name) (\(wanted))")
+        }
+        guard checked == [wanted] else {
+            stop("for a rule that names \"\(profile)\" the picker has its checkmark at \(checked) and not at \(wanted)")
+        }
+        say("ok    a rule that names \"\(profile)\": \(line), checkmark at \(wanted)")
+    }
+    say("ok    its profiles are listed as \(inOrder)")
+
+    // The list of saved rules says it the same way.
+    let rulesEntry: ([AXUIElement]) -> AXUIElement? = { entries in
+        entries.first { entry in
+            let title = text(entry, kAXTitleAttribute) ?? ""
+            return title.hasPrefix("Saved Rules") || title.hasPrefix("Gemerkte Regeln")
+        }
+    }
+    guard clickDownMenu([rulesEntry]) else {
+        stop("SuperSurfer's menu has no Saved Rules")
+    }
+    let rulesShown = entryTitles(rulesEntry(statusMenuEntries())
+        .map { elements($0, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) } } ?? [])
+    for _ in 1...3 {
+        pressEscape()
+    }
+    for (domain, profile) in ruled where !rulesShown.contains("\(domain) → \(browser.name) (\(shown(profile)))") {
+        stop("Saved Rules has no \"\(domain) → \(browser.name) (\(shown(profile)))\"; it has \(rulesShown)")
+    }
+    say("ok    and so does the list of saved rules")
+    use(second)
+    expect("the window of \(second) is in front", of: app, within: 20) {
+        inFront("sst-second")
+    }
+
     say("-- a link for a profile without a shortcut is left alone")
     run("/usr/bin/open", ["-g", "-a", superSurfer, "supersurfer://profile/\(browser.id)/Default"])
     stays("the window of \(second) stays in front", of: app, for: 3) {
@@ -1626,6 +1928,7 @@ func testShortcuts(
     if !FileManager.default.fileExists(atPath: bundle(second)) {
         stop("\(bundle(second)) is gone as well")
     }
+    chosenNames["Profile 2"] = nil
 
     quit()
     if startToo {
@@ -1633,6 +1936,7 @@ func testShortcuts(
         // the profiles the browser really has on this Mac, not with the ones
         // made above. What can be checked is what it was started with.
         say("-- a browser that is not running is started with the profile")
+        let answeredSoFar = answeredStarts()
         use(second)
         var arguments = ""
         let started = waitUntil(40) {
@@ -1643,10 +1947,59 @@ func testShortcuts(
             return arguments.contains("--profile-directory=Profile 1")
         }
         if !started {
+            whyNoStart()
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
+        // Two seconds and no other time: see `TestBrowser.chosenInPicker`.
         pause(2)
+        quit()
+        guard browser.chosenInPicker else {
+            return
+        }
+
+        // The entry says "Work". What SuperSurfer hands on has to be the
+        // profile behind it, by the name the browser has for it. That takes
+        // a second start, and macOS has to have answered the first.
+        awaitAnswer(since: answeredSoFar)
+        say("-- a profile chosen in the picker under its shortcut's name is the one that opens")
+        let page = "sst-second.html"
+        let entries = openPicker(for: URL(fileURLWithPath: pages + "/" + page).absoluteString, showing: page)
+        let block = profileBlock(entries, below: browser.name, count: names.count)
+        guard let work = block.first(where: { text($0, kAXTitleAttribute) == "Work" }), let spot = middle(of: work) else {
+            let below = entryTitles(block)
+            let all = entryTitles(entries)
+            closePicker(showing: page)
+            stop("the picker has no Work below \(browser.name): \(below) of \(all)")
+        }
+        post(.mouseMoved, at: spot)
+        pause(0.3)
+        press(at: spot)
+        var startedWith = ""
+        let opened = waitUntil(40) {
+            guard let pid = running()?.processIdentifier else {
+                return false
+            }
+            startedWith = outputOf("/bin/ps", ["-ww", "-o", "args=", "-p", "\(pid)"])
+            return startedWith.contains("--profile-directory=Profile 1") && startedWith.contains(page)
+        }
+        if !opened {
+            whyNoStart()
+            stop("\(browser.name) was not started with the profile and the link: \(startedWith.isEmpty ? "not running" : startedWith)")
+        }
+        say("ok    \(browser.shortName) was started with --profile-directory=Profile 1 and the link")
+        // Where the link went is listed under the same name.
+        _ = clickDownMenu([])
+        let recent = entryTitles(statusMenuEntries())
+        for _ in 1...3 {
+            pressEscape()
+        }
+        guard recent.contains(where: { $0.hasSuffix("→ \(browser.name) (Work)") }) else {
+            stop("Recent Links has no entry that ends in \(browser.name) (Work): \(recent)")
+        }
+        say("ok    and Recent Links has it as \(browser.name) (Work)")
+        // Nothing is asked of SuperSurfer after this: on a runner this
+        // start is not answered while the browser is there.
         quit()
     }
 }

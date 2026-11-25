@@ -60,6 +60,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let browsers = installed?.browsers ?? []
         let profilesBlocked = installed?.profilesBlocked ?? []
         let rules = app.engine.rules()
+        let names = ProfileNames.current(engine: app.engine)
         app.setConfigError(status?.configError)
 
         menu.removeAllItems()
@@ -90,11 +91,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             menu.addItem(MenuItems.note(tr("None since SuperSurfer started", "Noch keine seit dem Start")))
         }
         for recent in app.recents {
-            menu.addItem(recentItem(recent, browsers: browsers))
+            menu.addItem(recentItem(recent, browsers: browsers, names: names))
         }
 
         menu.addItem(.separator())
-        menu.addItem(rulesItem(rules))
+        menu.addItem(rulesItem(rules, names: names))
         menu.addItem(pickerKeyItem())
         menu.addItem(ActionMenuItem(tr(
             "Choose Browser for Copied Link…",
@@ -147,7 +148,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     // MARK: - Sections
 
-    private func recentItem(_ recent: RecentLink, browsers: [BrowserInfo]) -> NSMenuItem {
+    private func recentItem(_ recent: RecentLink, browsers: [BrowserInfo], names: ProfileNames) -> NSMenuItem {
         let app = self.app
         let decision = recent.decision
         var entries: [NSMenuItem] = []
@@ -155,12 +156,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         entries.append(MenuItems.note(explanation(recent)))
         entries.append(.separator())
 
-        let openItems = MenuItems.browsers(browsers) { browser, profile in
+        let openItems = MenuItems.browsers(browsers, names: names) { browser, profile in
             app.open(decision, in: browser, profile: profile, rememberFor: nil)
         }
         entries.append(MenuItems.submenu(tr("Open Again in", "Erneut öffnen in"), items: openItems))
         for host in decision.rememberHosts {
-            let rememberItems = MenuItems.browsers(browsers) { browser, profile in
+            let rememberItems = MenuItems.browsers(browsers, names: names) { browser, profile in
                 app.remember(domain: host, browser: browser, profile: profile)
             }
             entries.append(MenuItems.submenu(
@@ -174,7 +175,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         })
 
         let place = decision.host ?? Format.shortURL(decision.routedUrl, limit: 40)
-        let item = MenuItems.submenu("\(place) → \(recent.browser)", items: entries)
+        let item = MenuItems.submenu("\(place) → \(names.label(recent.target))", items: entries)
         item.toolTip = decision.inputUrl
         return item
     }
@@ -203,7 +204,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         return parts.joined(separator: " · ")
     }
 
-    private func rulesItem(_ reply: RulesReply?) -> NSMenuItem {
+    private func rulesItem(_ reply: RulesReply?, names: ProfileNames) -> NSMenuItem {
         let app = self.app
         let rules = reply?.rules ?? []
         var entries: [NSMenuItem] = []
@@ -228,7 +229,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             }
         }
         for rule in rules {
-            let target = Format.browserLabel(rule.browserName, profile: rule.profile)
+            let target = names.label(
+                BrowserTarget(browserId: rule.browser, browser: rule.browserName, profile: rule.profile)
+            )
             let domain = rule.domain
             let remove = ActionMenuItem(tr("Remove Rule", "Regel entfernen")) {
                 app.forget(domain: domain)

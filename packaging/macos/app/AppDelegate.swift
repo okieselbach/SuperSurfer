@@ -4,9 +4,9 @@ import Cocoa
 /// only; the decision log on disk is the permanent record.
 struct RecentLink {
     let decision: Decision
-    /// Where the link actually went. Differs from `decision.browser` after a
+    /// Where the link actually went. Differs from `decision.target` after a
     /// manual pick.
-    let browser: String
+    let target: BrowserTarget
     /// SuperSurfer's own share of the click: from receiving the event to
     /// handing the URL to Launch Services.
     let elapsedMs: Double?
@@ -230,14 +230,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             presentPicker(for: decision)
             return
         }
-        let browser = Format.browserLabel(decision.browser, profile: decision.profile)
-        launch(plan, decision: decision, browser: browser, pickedByHand: false, times: times)
+        launch(plan, decision: decision, target: decision.target, pickedByHand: false, times: times)
     }
 
     private func launch(
         _ plan: LaunchPlan,
         decision: Decision,
-        browser: String,
+        target: BrowserTarget,
         pickedByHand: Bool,
         times: RouteTimes?
     ) {
@@ -255,17 +254,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 format: "event %.2f, queue %.2f, engine %.2f of which core %.2f, back to main %.2f",
                 eventMs, queueMs, engineMs, times.coreMs ?? 0, backMs
             )
-            fputs("SuperSurfer: routed \(decision.inputUrl) to \(browser) in \(Format.milliseconds(elapsedMs)) (\(parts))\n", stderr)
+            fputs("SuperSurfer: routed \(decision.inputUrl) to \(target.label) in \(Format.milliseconds(elapsedMs)) (\(parts))\n", stderr)
         }
         Launcher.open(plan) { error in
             if trace {
                 let waited = RouteTimes.milliseconds(from: handedOver, to: DispatchTime.now())
-                fputs("SuperSurfer: \(browser) accepted it after \(Format.milliseconds(waited))\n", stderr)
+                fputs("SuperSurfer: \(target.label) accepted it after \(Format.milliseconds(waited))\n", stderr)
             }
             guard let error = error else {
                 return
             }
-            NSLog("SuperSurfer: could not open %@ in %@: %@", plan.url, browser, error.localizedDescription)
+            NSLog("SuperSurfer: could not open %@ in %@: %@", plan.url, target.label, error.localizedDescription)
             // The browser may have been moved or removed. Look again so the
             // next click does not hit the same stale path.
             queue.async {
@@ -273,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         recents.insert(
-            RecentLink(decision: decision, browser: browser, elapsedMs: elapsedMs, pickedByHand: pickedByHand),
+            RecentLink(decision: decision, target: target, elapsedMs: elapsedMs, pickedByHand: pickedByHand),
             at: 0
         )
         if recents.count > AppDelegate.recentLimit {
@@ -310,7 +309,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let browsers = engine.browsers()?.browsers ?? []
-        let menu = PickerMenu.make(app: self, decision: decision, browsers: browsers)
+        let names = ProfileNames.current(engine: engine)
+        let menu = PickerMenu.make(app: self, decision: decision, browsers: browsers, names: names)
         // Kept until the next picker replaces it: the chosen item has to
         // outlive the tracking loop to deliver its action.
         pickerMenu = menu
@@ -359,8 +359,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             DispatchQueue.main.async {
                 if let reply = reply, reply.ok, let plan = reply.launch {
-                    let label = Format.browserLabel(browser.name, profile: profile)
-                    self.launch(plan, decision: decision, browser: label, pickedByHand: true, times: nil)
+                    let target = BrowserTarget(browserId: browser.id, browser: browser.name, profile: profile)
+                    self.launch(plan, decision: decision, target: target, pickedByHand: true, times: nil)
                 } else {
                     self.showAlert(
                         title: tr("The link could not be opened", "Der Link konnte nicht geöffnet werden"),

@@ -87,8 +87,15 @@ enum MenuItems {
 
     /// One entry per browser with its profiles indented below it. Choosing the
     /// browser itself opens whatever profile it used last.
+    ///
+    /// A profile is listed under the name `names` has for it: the one its
+    /// Dock shortcut was given, where somebody chose one. `onPick` gets the
+    /// name the browser has for the profile, which is what the engine goes
+    /// by. `checkedProfile` may name the profile either way, or by its
+    /// folder as config.js can.
     static func browsers(
         _ browsers: [BrowserInfo],
+        names: ProfileNames,
         checkedBrowserId: String? = nil,
         checkedProfile: String? = nil,
         onPick: @escaping (BrowserInfo, String?) -> Void
@@ -103,11 +110,19 @@ enum MenuItems {
             }
             items.append(item)
 
-            for profile in browser.profiles {
-                let entry = ActionMenuItem(profile) { onPick(browser, profile) }
+            for profile in names.listed(browser.profiles, of: browser.id) {
+                let given = profile.given
+                let entry = ActionMenuItem(profile.shown) { onPick(browser, given) }
                 entry.indentationLevel = 2
-                if isChecked, let wanted = checkedProfile,
-                   wanted.caseInsensitiveCompare(profile) == .orderedSame {
+                if profile.shown != given {
+                    // Rules in config.js go by the browser's name, so it
+                    // has to be findable from here.
+                    entry.toolTip = tr(
+                        "\(browser.name) calls this profile “\(given)”",
+                        "In \(browser.name) heißt dieses Profil „\(given)“"
+                    )
+                }
+                if isChecked, let wanted = checkedProfile, names.same(wanted, given, of: browser.id) {
                     entry.state = .on
                 }
                 items.append(entry)
