@@ -983,22 +983,27 @@ struct TestBrowser {
     let bundleID: String
     /// Where it keeps its profiles, below Library/Application Support.
     let dataFolder: String
-    /// Whether the test has SuperSurfer start this browser a second time,
-    /// through the picker, and waits each time until macOS has answered
-    /// the start before it quits the browser.
+    /// Whether the test goes on to choose one of this browser's profiles
+    /// in the picker, which has SuperSurfer start the browser a second
+    /// time. Only for the browser that dock-shortcut-test.sh runs last,
+    /// and it is the last thing the test asks SuperSurfer for.
     ///
-    /// Not Edge. Launch Services hands on what one app asks it to open one
-    /// request at a time, and each waits for its answer, so a start that is
-    /// not answered holds up everything SuperSurfer asks for after it. On
-    /// GitHub's macOS 15 runner a start of Edge is not always answered: in
-    /// run 65 it was not after 40 s, with Edge there all the time. In runs
-    /// 63 and 64 Edge was started a second time and quit seven seconds
-    /// later. That start was never answered, not even once Edge was gone,
-    /// and Chrome, asked for a minute and a half later, never came. What
-    /// has worked for Edge every time is one start that is quit within
-    /// three seconds: macOS then answers that the start failed, or that it
-    /// went well.
-    let startedTwice: Bool
+    /// The reason is in what a runner's browsers do. Launch Services hands
+    /// on what one app asks it to open one request at a time, and each
+    /// waits until the browser has answered, which is when it has finished
+    /// starting. On GitHub's macOS 15 runner, where no browser has ever
+    /// been run, a browser that SuperSurfer starts does not get that far:
+    /// Chrome was there for 40 s without a window (runs 66 and 67), and
+    /// Edge for 40 s as well (run 65), unless the file that says its first
+    /// run is behind it was put there before (run 67). Until the answer
+    /// comes, nothing SuperSurfer asks macOS for after it happens.
+    ///
+    /// For a browser that was quit within three seconds of such a start
+    /// the answer has come every time; with Edge five to six seconds after
+    /// the start. In runs 63 and 64 Edge was started a second time and quit
+    /// seven seconds later. That start was never answered, and Chrome,
+    /// asked for a minute and a half later, never came.
+    let chosenInPicker: Bool
 }
 
 let testBrowsers = [
@@ -1010,7 +1015,7 @@ let testBrowsers = [
         binary: "Microsoft Edge",
         bundleID: "com.microsoft.edgemac",
         dataFolder: "Microsoft Edge",
-        startedTwice: false
+        chosenInPicker: false
     ),
     TestBrowser(
         id: "chrome",
@@ -1020,7 +1025,7 @@ let testBrowsers = [
         binary: "Google Chrome",
         bundleID: "com.google.Chrome",
         dataFolder: "Google/Chrome",
-        startedTwice: true
+        chosenInPicker: true
     ),
 ]
 
@@ -1447,17 +1452,18 @@ func testShortcuts(
             say("        \(line)")
         }
     }
-    /// Waits until macOS has answered SuperSurfer a start it was asked for.
-    /// `before` is what `answeredStarts` said before the start was asked
-    /// for. See `TestBrowser.startedTwice` for why a browser that is to be
-    /// started again is not quit before that.
+    /// Waits until macOS has answered SuperSurfer a start it asked for,
+    /// once the browser has been quit again. `before` is what
+    /// `answeredStarts` said before the start was asked for. Until that
+    /// answer is there SuperSurfer can start nothing else; see
+    /// `TestBrowser.chosenInPicker`.
     func awaitAnswer(since before: Int) {
         let began = Date()
         guard waitUntil(40, { answeredStarts() > before }) else {
             whyNoStart()
-            stop("macOS has not answered the start of \(browser.name) for 40 s, although \(browser.name) is there")
+            stop("macOS has not answered the start of \(browser.name) 40 s after \(browser.name) was quit")
         }
-        say(String(format: "      macOS answered that start %.1f s later", Date().timeIntervalSince(began)))
+        say(String(format: "      macOS answered that start %.1f s after the browser was quit", Date().timeIntervalSince(began)))
     }
 
     // Three profiles, each with one window that shows a page of its own. The
@@ -1914,18 +1920,6 @@ func testShortcuts(
         // SuperSurfer starts the browser the way it does for a link, so with
         // the profiles the browser really has on this Mac, not with the ones
         // made above. What can be checked is what it was started with.
-        // A browser that has never been run on this Mac has a question
-        // before its first window, and a runner's browsers never have. The
-        // file below is how a Chromium browser notes that this is behind
-        // it. Tried in run 67: is that question what keeps macOS from
-        // answering the start?
-        let ownData = NSHomeDirectory() + "/Library/Application Support/" + browser.dataFolder
-        let firstRun = ownData + "/First Run"
-        if !FileManager.default.fileExists(atPath: firstRun) {
-            try? FileManager.default.createDirectory(atPath: ownData, withIntermediateDirectories: true)
-            let noted = FileManager.default.createFile(atPath: firstRun, contents: nil)
-            say("      \(browser.name) has never been run here; noted for it that it has: \(noted)")
-        }
         say("-- a browser that is not running is started with the profile")
         let answeredSoFar = answeredStarts()
         use(second)
@@ -1942,17 +1936,16 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
-        guard browser.startedTwice else {
-            pause(2)
-            quit()
-            return
-        }
-        awaitAnswer(since: answeredSoFar)
         pause(2)
         quit()
+        guard browser.chosenInPicker else {
+            return
+        }
 
         // The entry says "Work". What SuperSurfer hands on has to be the
-        // profile behind it, by the name the browser has for it.
+        // profile behind it, by the name the browser has for it. That takes
+        // a second start, and macOS has to have answered the first.
+        awaitAnswer(since: answeredSoFar)
         say("-- a profile chosen in the picker under its shortcut's name is the one that opens")
         let page = "sst-second.html"
         let entries = openPicker(for: URL(fileURLWithPath: pages + "/" + page).absoluteString, showing: page)
@@ -1963,7 +1956,6 @@ func testShortcuts(
             closePicker(showing: page)
             stop("the picker has no Work below \(browser.name): \(below) of \(all)")
         }
-        let answeredBefore = answeredStarts()
         post(.mouseMoved, at: spot)
         pause(0.3)
         press(at: spot)
@@ -1980,7 +1972,6 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile and the link: \(startedWith.isEmpty ? "not running" : startedWith)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1 and the link")
-        awaitAnswer(since: answeredBefore)
         // Where the link went is listed under the same name.
         _ = clickDownMenu([])
         let recent = entryTitles(statusMenuEntries())
@@ -1991,7 +1982,8 @@ func testShortcuts(
             stop("Recent Links has no entry that ends in \(browser.name) (Work): \(recent)")
         }
         say("ok    and Recent Links has it as \(browser.name) (Work)")
-        pause(2)
+        // Nothing is asked of SuperSurfer after this: on a runner this
+        // start is not answered while the browser is there.
         quit()
     }
 }
