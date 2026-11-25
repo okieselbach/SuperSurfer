@@ -411,7 +411,7 @@ supersurfer doctor
 Bump the version in `Cargo.toml`, `Cargo.lock` and `packaging/macos/Info.plist`, merge to `main`, then publish in one of three ways. Each ends in the same CI run, which builds every platform and attaches the binaries:
 
 - **From the Actions page:** CI → Run workflow → branch `main`, tick *Publish a GitHub release*. This creates the tag `v<version>` and the release.
-- **With a tag:** `git tag v0.3.0 && git push origin v0.3.0`.
+- **With a tag:** `git tag v0.3.1 && git push origin v0.3.1`.
 - **From the Releases page:** create a release with a new tag `v<version>` on `main`. CI adds the binaries a few minutes later, and the notes if you left them empty.
 
 ## Architecture
