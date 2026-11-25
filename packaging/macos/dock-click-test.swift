@@ -1111,6 +1111,67 @@ func entryTitled(_ wanted: [String]) -> ([AXUIElement]) -> AXUIElement? {
     return { entries in entries.first { wanted.contains(text($0, kAXTitleAttribute) ?? "") } }
 }
 
+// TEMPORARY, to be removed before this is merged: what the Dock draws for a
+// shortcut, as the screen shows it. Whether the Dock draws a renamed
+// shortcut's new picture by itself cannot be asked through Accessibility.
+func dockPicture(named name: String) -> NSBitmapImageRep? {
+    guard CGPreflightScreenCaptureAccess() else {
+        say("      [picture] this session may not look at the screen")
+        return nil
+    }
+    guard let icon = appIcons().first(where: { $0.url?.lastPathComponent == name }),
+          let position = value(icon.element, kAXPositionAttribute),
+          let size = value(icon.element, kAXSizeAttribute) else {
+        say("      [picture] no icon of \(name) in the Dock")
+        return nil
+    }
+    var origin = CGPoint.zero
+    var extent = CGSize.zero
+    guard AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+          AXValueGetValue(size as! AXValue, .cgSize, &extent) else {
+        return nil
+    }
+    let file = NSTemporaryDirectory() + "supersurfer-dock-\(UUID().uuidString).png"
+    let rect = "\(Int(origin.x)),\(Int(origin.y)),\(Int(extent.width)),\(Int(extent.height))"
+    run("/usr/sbin/screencapture", ["-x", "-R", rect, file])
+    defer { try? FileManager.default.removeItem(atPath: file) }
+    guard let data = FileManager.default.contents(atPath: file) else {
+        say("      [picture] screencapture wrote nothing for \(rect)")
+        return nil
+    }
+    return NSBitmapImageRep(data: data)
+}
+
+// TEMPORARY as well: the lower right part of such a picture in characters,
+// where the badge with its letters is.
+func sketch(_ picture: NSBitmapImageRep?, _ label: String) {
+    guard let picture = picture else {
+        say("      [picture] \(label): none")
+        return
+    }
+    let width = picture.pixelsWide
+    let height = picture.pixelsHigh
+    say("      [picture] \(label): \(width)x\(height)")
+    let columns = 46
+    let rows = 20
+    let left = width * 45 / 100
+    let top = height * 42 / 100
+    for row in 0..<rows {
+        var line = "      [picture] "
+        for column in 0..<columns {
+            let x = left + (width - left) * column / columns
+            let y = top + (height - top) * row / rows
+            guard let color = picture.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                line += "?"
+                continue
+            }
+            let light = 0.3 * color.redComponent + 0.59 * color.greenComponent + 0.11 * color.blueComponent
+            line += light > 0.85 ? "#" : (light > 0.6 ? "+" : (light > 0.35 ? "." : " "))
+        }
+        say(line)
+    }
+}
+
 /// Everything below an element that has this role, a few levels down.
 func descendants(of root: AXUIElement, role: String, depth: Int = 5) -> [AXUIElement] {
     var found: [AXUIElement] = []
@@ -1418,6 +1479,10 @@ func testShortcuts(
     let chosen = "\(browser.shortName) Work"
     let oldBundle = bundle(second)
     let sameFile = fileNumber(oldBundle)
+    if inDock != nil {
+        // TEMPORARY
+        sketch(dockPicture(named: "\(titles[second] ?? "?").app"), "in the Dock before it is renamed")
+    }
     chooseInDockShortcuts(
         [profileEntry(browser.name, second), entryTitled(["Rename…", "Umbenennen …"])],
         what: "\(browser.name), \(second), Rename"
@@ -1454,6 +1519,10 @@ func testShortcuts(
             stop("the Dock does not hold \(chosen).app; it holds \(appIcons().map { $0.url?.lastPathComponent ?? $0.title })")
         }
         say("ok    and the Dock holds it under its new name")
+        // TEMPORARY
+        sketch(dockPicture(named: "\(chosen).app"), "in the Dock right after")
+        pause(6)
+        sketch(dockPicture(named: "\(chosen).app"), "in the Dock six seconds later")
     }
     use(third)
     expect("the window of \(third) is in front", of: app, within: 20) {
