@@ -151,6 +151,8 @@ This has nothing to do with routing links. It is here because SuperSurfer is loa
 
 A double click ends where it began: its second click never puts anything away, and brings back what the first one put away.
 
+A click that could only be acted on more than a second after it was made is dropped, because an app that vanishes that long after the click comes as a surprise. It takes a Mac that is very busy: on GitHub's macOS 26 runner it happened to a click on Safari's icon while Safari was still starting. The click then does what it does without Dock Click, which is nothing.
+
 **Minimize Windows moves the Dock.** Every minimized window gets a place in the Dock, and the Dock shifts its icons to make room, so after the click the pointer may no longer be on the app's icon. Switch on System Settings → Desktop & Dock → *Minimize windows into application icon* and the icons stay where they are. *Hide App* never moves anything. Windows on other Spaces and full-screen windows are not minimized. If you bring one of the minimized windows back by hand, Dock Click forgets the others; they stay where you left them.
 
 **Permission.** The first time you choose *Hide App* or *Minimize Windows*, macOS asks for the Accessibility permission (System Settings → Privacy & Security → Accessibility). SuperSurfer needs it to ask the Dock which icon is under the pointer and to minimize another app's windows. It works from the next click. Until the permission is there, the menu entry carries a ⚠︎ and clicks behave as always.

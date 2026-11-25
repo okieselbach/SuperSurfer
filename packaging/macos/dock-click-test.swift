@@ -199,24 +199,28 @@ var lastClick: Clicked?
 /// Where SuperSurfer writes its trace, if the script said so.
 let tracePath = ProcessInfo.processInfo.environment["SUPERSURFER_TRACE"]
 
-func traceLines(with words: String) -> Int {
-    guard let path = tracePath, let text = try? String(contentsOfFile: path, encoding: .utf8) else {
-        return 0
-    }
-    return text.components(separatedBy: "\n").filter { $0.contains(words) }.count
-}
-
-/// To be asked before a click on a Dock icon. Dock Click leaves a click alone
-/// that reaches it more than a quarter of a second after it was made, and
-/// says so in its trace. On a virtual machine that happens now and then, and
-/// such a click was lost before Dock Click had a say.
+/// To be asked before a click on a Dock icon. Dock Click drops a click that
+/// it can only act on too late, and says so in its trace. There are two
+/// such moments: when the click reaches it more than a quarter of a second
+/// after it was made, and when the click is more than a second old once
+/// everything has been asked that has to be asked before an app is put
+/// away. On a virtual machine both happen now and then, the second one seen
+/// on macOS 26 while Safari was starting. Such a click says nothing about
+/// what Dock Click does with one that comes through in time.
 func lateForSuperSurfer() -> (() -> String?)? {
-    guard tracePath != nil else {
+    guard let path = tracePath else {
         return nil
     }
-    let before = traceLines(with: "was left alone")
+    func droppedForAge() -> Int {
+        let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n").filter { line in
+            line.contains("was left alone")
+                || (line.contains("left alone after all") && line.contains("the click is"))
+        }.count
+    }
+    let before = droppedForAge()
     return {
-        traceLines(with: "was left alone") > before ? "SuperSurfer got this click too late to act on it" : nil
+        droppedForAge() > before ? "SuperSurfer got this click too late to act on it" : nil
     }
 }
 
@@ -1591,43 +1595,6 @@ func testShortcuts(
     use(second)
     expect("the window of \(second) is in front", of: app, within: 20) {
         inFront("sst-second")
-    }
-
-    // TEMPORARY, to be removed again: run 45609609073 failed right above on
-    // macOS 15. The browser had been hidden a hundredth of a second after
-    // its window came out of the Dock, and the click that followed was not
-    // answered for twenty seconds. Is it that, and does a moment in between
-    // change it?
-    for settle in [0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 1.5, 1.5, 1.5, 1.5] {
-        if let minimized = window(of: app, showing: "sst-third") {
-            AXUIElementSetAttributeValue(minimized, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
-        }
-        let stowed = waitUntil(10) { minimizedWindows(app) == 1 }
-        calculatorInFront()
-        use(third)
-        let back = waitUntil(20) { inFront("sst-third") && minimizedWindows(app) == 0 }
-        pause(settle)
-        app.hide()
-        let hidden = waitUntil(10) { app.isHidden }
-        pause(1)
-        let askedBefore = asked()
-        let began = Date()
-        use(second)
-        lastClick = nil
-        let shown = waitUntil(25) { inFront("sst-second") }
-        say(String(
-            format: "      [hide] %.1f s after the window was back: stowed %@, back %@, hidden %@, the click reached SuperSurfer %@, shown again %@ after %.1f s",
-            settle, "\(stowed)", "\(back)", "\(hidden)", "\(asked() > askedBefore)", "\(shown)", Date().timeIntervalSince(began)
-        ))
-        if !shown {
-            say("      [hide] \(state(of: app))")
-            say("      [hide] \(ownAccount(of: app))")
-            // So that the next round starts from where the others do.
-            app.unhide()
-            app.activate(options: [])
-            pause(4)
-            say("      [hide] helped along: \(state(of: app))")
-        }
     }
 
     say("-- a profile without a window gets one")
