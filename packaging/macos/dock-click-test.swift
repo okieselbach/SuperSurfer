@@ -998,11 +998,15 @@ struct TestBrowser {
     /// run is behind it was put there before (run 67). Until the answer
     /// comes, nothing SuperSurfer asks macOS for after it happens.
     ///
-    /// For a browser that was quit within three seconds of such a start
-    /// the answer has come every time; with Edge five to six seconds after
-    /// the start. In runs 63 and 64 Edge was started a second time and quit
-    /// seven seconds later. That start was never answered, and Chrome,
-    /// asked for a minute and a half later, never came.
+    /// When the answer does come is regular. Every start whose browser
+    /// was gone again five seconds after it was answered between five and
+    /// six seconds after the start, with "could not be launched": Edge in
+    /// every run, Chrome in run 68. No start whose browser was still there
+    /// at that time was answered while the test went on. That includes
+    /// Edge in runs 63 and 64, which was quit seven seconds after its
+    /// second start: two minutes later there was still no answer, and
+    /// Chrome, which SuperSurfer was asked for in between, never came.
+    /// So the test quits a browser that SuperSurfer started at once.
     let chosenInPicker: Bool
 }
 
@@ -1936,7 +1940,9 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
-        pause(2)
+        // At once: macOS answers this start only if the browser is gone
+        // five seconds after it. See `TestBrowser.chosenInPicker`.
+        pause(0.5)
         quit()
         guard browser.chosenInPicker else {
             return
