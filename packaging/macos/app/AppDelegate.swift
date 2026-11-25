@@ -85,6 +85,15 @@ struct AlertAction {
     let run: () -> Void
 }
 
+/// A question that is answered with one line of text.
+struct TextQuestion {
+    let title: String
+    let text: String
+    let value: String
+    let confirm: String
+    let then: (String) -> Void
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let recentLimit = 10
 
@@ -104,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingPickers: [Decision] = []
     private var pickerMenu: NSMenu?
     private var pendingAlerts: [(title: String, text: String, action: AlertAction?)] = []
+    private var pendingQuestions: [TextQuestion] = []
     private var activity: NSObjectProtocol?
 
     // MARK: - Lifecycle
@@ -432,8 +442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showAlert(
             title: tr("Browser profiles cannot be read", "Browser-Profile sind nicht lesbar"),
             text: tr(
-                "macOS does not let SuperSurfer read the profile list of: \(names). macOS 27 and later protect browser data from other apps.\n\nLinks are routed all the same. SuperSurfer uses the profile lists it read last, if any. A profile it does not know opens in the profile that browser used last, unless config.js names it by its folder (\"Default\", \"Profile 1\").\n\nTo allow access, open System Settings > Privacy & Security > Files & Folders and switch on the browsers under SuperSurfer. If SuperSurfer is not listed there, add it under Full Disk Access instead. Then quit SuperSurfer and open it again.",
-                "macOS lässt SuperSurfer die Profilliste nicht lesen von: \(names). Ab macOS 27 sind Browser-Daten vor anderen Apps geschützt.\n\nLinks werden trotzdem geroutet. SuperSurfer nutzt die zuletzt gelesenen Profillisten, falls vorhanden. Ein unbekanntes Profil öffnet im zuletzt genutzten Profil des Browsers, außer config.js nennt es mit seinem Ordnernamen („Default“, „Profile 1“).\n\nZugriff erlauben: Systemeinstellungen > Datenschutz & Sicherheit > Dateien & Ordner öffnen und unter SuperSurfer die Browser einschalten. Steht SuperSurfer dort nicht, füge es stattdessen unter Festplattenvollzugriff hinzu. Danach SuperSurfer beenden und neu öffnen."
+                "macOS does not let SuperSurfer read the profile list of: \(names). macOS 27 and later protect browser data from other apps.\n\nLinks are routed all the same. SuperSurfer uses the profile lists it read last, if any. A profile it does not know opens in the profile that browser used last, unless config.js names it by its folder (\"Default\", \"Profile 1\").\n\nTo allow access, open System Settings > Privacy & Security > Files & Folders and switch on the browsers under SuperSurfer. If SuperSurfer is not listed there, add it under Full Disk Access instead. Then quit SuperSurfer and open it again.\n\nDoes a switch jump back to off? Then it probably belongs to an older version of SuperSurfer. Quit SuperSurfer, run \"tccutil reset All dev.supersurfer.app\" in Terminal, open SuperSurfer and its menu once, quit it again, and only then switch the browsers on.",
+                "macOS lässt SuperSurfer die Profilliste nicht lesen von: \(names). Ab macOS 27 sind Browser-Daten vor anderen Apps geschützt.\n\nLinks werden trotzdem geroutet. SuperSurfer nutzt die zuletzt gelesenen Profillisten, falls vorhanden. Ein unbekanntes Profil öffnet im zuletzt genutzten Profil des Browsers, außer config.js nennt es mit seinem Ordnernamen („Default“, „Profile 1“).\n\nZugriff erlauben: Systemeinstellungen > Datenschutz & Sicherheit > Dateien & Ordner öffnen und unter SuperSurfer die Browser einschalten. Steht SuperSurfer dort nicht, füge es stattdessen unter Festplattenvollzugriff hinzu. Danach SuperSurfer beenden und neu öffnen.\n\nSpringt ein Schalter zurück auf Aus? Dann gehört er vermutlich zu einer älteren Version von SuperSurfer. Beende SuperSurfer, führe im Terminal „tccutil reset All dev.supersurfer.app“ aus, öffne SuperSurfer und einmal sein Menü, beende es wieder und schalte erst dann die Browser ein."
             ),
             action: AlertAction(title: tr("Open System Settings", "Systemeinstellungen öffnen")) {
                 PrivacySettings.openFilesAndFolders()
@@ -468,6 +478,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingAlerts.append((title: title, text: text, action: action))
         if pendingAlerts.count == 1 {
             perform(#selector(showPendingAlert), with: nil, afterDelay: 0)
+        }
+    }
+
+    /// Asks for one line of text and hands it to `then`, unless the question
+    /// was cancelled. It starts from the run loop like `showAlert`, so no
+    /// link waits for the answer.
+    func askForText(title: String, text: String, value: String, confirm: String, then: @escaping (String) -> Void) {
+        pendingQuestions.append(TextQuestion(title: title, text: text, value: value, confirm: confirm, then: then))
+        if pendingQuestions.count == 1 {
+            perform(#selector(showPendingQuestion), with: nil, afterDelay: 0)
+        }
+    }
+
+    @objc private func showPendingQuestion() {
+        guard let question = pendingQuestions.first else {
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = question.title
+        alert.informativeText = question.text
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = question.value
+        alert.accessoryView = field
+        // The first button is the default one and answers Return.
+        alert.addButton(withTitle: question.confirm)
+        alert.addButton(withTitle: tr("Cancel", "Abbrechen")).keyEquivalent = "\u{1b}"
+        // The name is there to be typed over.
+        alert.window.initialFirstResponder = field
+        let response = alert.runModal()
+
+        pendingQuestions.removeFirst()
+        if response == .alertFirstButtonReturn {
+            question.then(field.stringValue)
+        }
+        if !pendingQuestions.isEmpty {
+            perform(#selector(showPendingQuestion), with: nil, afterDelay: 0)
         }
     }
 

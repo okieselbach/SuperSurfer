@@ -199,24 +199,28 @@ var lastClick: Clicked?
 /// Where SuperSurfer writes its trace, if the script said so.
 let tracePath = ProcessInfo.processInfo.environment["SUPERSURFER_TRACE"]
 
-func traceLines(with words: String) -> Int {
-    guard let path = tracePath, let text = try? String(contentsOfFile: path, encoding: .utf8) else {
-        return 0
-    }
-    return text.components(separatedBy: "\n").filter { $0.contains(words) }.count
-}
-
-/// To be asked before a click on a Dock icon. Dock Click leaves a click alone
-/// that reaches it more than a quarter of a second after it was made, and
-/// says so in its trace. On a virtual machine that happens now and then, and
-/// such a click was lost before Dock Click had a say.
+/// To be asked before a click on a Dock icon. Dock Click drops a click that
+/// it can only act on too late, and says so in its trace. There are two
+/// such moments: when the click reaches it more than a quarter of a second
+/// after it was made, and when the click is more than a second old once
+/// everything has been asked that has to be asked before an app is put
+/// away. On a virtual machine both happen now and then, the second one seen
+/// on macOS 26 while Safari was starting. Such a click says nothing about
+/// what Dock Click does with one that comes through in time.
 func lateForSuperSurfer() -> (() -> String?)? {
-    guard tracePath != nil else {
+    guard let path = tracePath else {
         return nil
     }
-    let before = traceLines(with: "was left alone")
+    func droppedForAge() -> Int {
+        let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n").filter { line in
+            line.contains("was left alone")
+                || (line.contains("left alone after all") && line.contains("the click is"))
+        }.count
+    }
+    let before = droppedForAge()
     return {
-        traceLines(with: "was left alone") > before ? "SuperSurfer got this click too late to act on it" : nil
+        droppedForAge() > before ? "SuperSurfer got this click too late to act on it" : nil
     }
 }
 
@@ -1090,14 +1094,17 @@ func dockShortcutsEntry(_ entries: [AXUIElement]) -> AXUIElement? {
     }
 }
 
-/// The entry for a profile, below the line that names its browser.
+/// The entry for a profile, below the line that names its browser. Where
+/// its shortcut has a name of the user's choosing, the entry shows that
+/// behind an arrow.
 func profileEntry(_ browser: String, _ profile: String) -> ([AXUIElement]) -> AXUIElement? {
     return { entries in
         let titles = entries.map { text($0, kAXTitleAttribute) ?? "" }
         guard let header = titles.firstIndex(of: browser) else {
             return nil
         }
-        for index in titles.indices where index > header && titles[index] == profile {
+        for index in titles.indices
+        where index > header && (titles[index] == profile || titles[index].hasPrefix(profile + " → ")) {
             return entries[index]
         }
         return nil
@@ -1106,6 +1113,109 @@ func profileEntry(_ browser: String, _ profile: String) -> ([AXUIElement]) -> AX
 
 func entryTitled(_ wanted: [String]) -> ([AXUIElement]) -> AXUIElement? {
     return { entries in entries.first { wanted.contains(text($0, kAXTitleAttribute) ?? "") } }
+}
+
+/// What the Dock draws for one of its icons, as the screen shows it. Nil
+/// where this session may not look at the screen.
+func dockPicture(named name: String) -> NSBitmapImageRep? {
+    guard CGPreflightScreenCaptureAccess(),
+          let icon = appIcons().first(where: { $0.url?.lastPathComponent == name }),
+          let position = value(icon.element, kAXPositionAttribute),
+          let size = value(icon.element, kAXSizeAttribute) else {
+        return nil
+    }
+    var origin = CGPoint.zero
+    var extent = CGSize.zero
+    guard AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+          AXValueGetValue(size as! AXValue, .cgSize, &extent) else {
+        return nil
+    }
+    let file = NSTemporaryDirectory() + "supersurfer-dock-\(UUID().uuidString).png"
+    let rect = "\(Int(origin.x)),\(Int(origin.y)),\(Int(extent.width)),\(Int(extent.height))"
+    run("/usr/sbin/screencapture", ["-x", "-R", rect, file])
+    defer { try? FileManager.default.removeItem(atPath: file) }
+    return FileManager.default.contents(atPath: file).flatMap { NSBitmapImageRep(data: $0) }
+}
+
+/// In how many of their points two such pictures differ. Nil if that
+/// cannot be told.
+func pointsThatDiffer(_ first: NSBitmapImageRep?, _ second: NSBitmapImageRep?) -> Int? {
+    guard let first = first, let second = second,
+          first.pixelsWide == second.pixelsWide, first.pixelsHigh == second.pixelsHigh else {
+        return nil
+    }
+    var differing = 0
+    for y in 0..<first.pixelsHigh {
+        for x in 0..<first.pixelsWide {
+            guard let one = first.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                  let other = second.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                continue
+            }
+            let apart = abs(one.redComponent - other.redComponent) + abs(one.greenComponent - other.greenComponent)
+                + abs(one.blueComponent - other.blueComponent)
+            if apart > 0.08 {
+                differing += 1
+            }
+        }
+    }
+    return differing
+}
+
+/// Everything below an element that has this role, a few levels down.
+func descendants(of root: AXUIElement, role: String, depth: Int = 5) -> [AXUIElement] {
+    var found: [AXUIElement] = []
+    for child in elements(root, kAXChildrenAttribute) {
+        if text(child, kAXRoleAttribute) == role {
+            found.append(child)
+        }
+        if depth > 0 {
+            found += descendants(of: child, role: role, depth: depth - 1)
+        }
+    }
+    return found
+}
+
+/// The window in which SuperSurfer asks for a line of text, while it is up:
+/// its field and its buttons.
+func superSurferQuestion() -> (field: AXUIElement, buttons: [AXUIElement])? {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.supersurfer.app").first else {
+        return nil
+    }
+    for window in elements(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute) {
+        if let field = descendants(of: window, role: kAXTextFieldRole).first {
+            return (field, descendants(of: window, role: kAXButtonRole))
+        }
+    }
+    return nil
+}
+
+/// Answers that question: the text goes into the field, and the button
+/// that says yes is pressed.
+func answerQuestion(with answer: String, button wanted: [String]) {
+    var question: (field: AXUIElement, buttons: [AXUIElement])?
+    let asked = waitUntil(10) {
+        question = superSurferQuestion()
+        return question != nil
+    }
+    guard asked, let found = question else {
+        stop("SuperSurfer did not ask for a name")
+    }
+    pause(0.5)
+    let set = AXUIElementSetAttributeValue(found.field, kAXValueAttribute as CFString, answer as CFString)
+    pause(0.3)
+    let shown = text(found.field, kAXValueAttribute) ?? ""
+    guard set == .success, shown == answer else {
+        stop("the name did not get into SuperSurfer's question: error \(set.rawValue), the field has \"\(shown)\"")
+    }
+    let titles = found.buttons.map { text($0, kAXTitleAttribute) ?? "?" }
+    guard let button = found.buttons.first(where: { wanted.contains(text($0, kAXTitleAttribute) ?? "") }) else {
+        stop("SuperSurfer's question has no button \(wanted), it has \(titles)")
+    }
+    AXUIElementPerformAction(button, kAXPressAction as CFString)
+    let gone = waitUntil(10) { superSurferQuestion() == nil }
+    if !gone {
+        stop("SuperSurfer's question did not go away")
+    }
 }
 
 /// SuperSurfer reads a browser's profiles when its menu opens, and keeps
@@ -1237,8 +1347,20 @@ func testShortcuts(
     guard listed, let second = names["Profile 1"], let third = names["Profile 2"] else {
         stop("\(browser.name) did not write its three profiles down")
     }
+    // What the shortcut of each profile is called. Two of them get other
+    // names further down.
+    var titles = [second: "\(browser.shortName) \(second)", third: "\(browser.shortName) \(third)"]
     func bundle(_ profile: String) -> String {
-        return "\(shortcuts)/\(browser.shortName) \(profile).app"
+        return "\(shortcuts)/\(titles[profile] ?? "?").app"
+    }
+    /// What a shortcut notes about itself in its Info.plist.
+    func noted(_ profile: String, _ key: String) -> String? {
+        return NSDictionary(contentsOfFile: bundle(profile) + "/Contents/Info.plist")?[key] as? String
+    }
+    /// The number the file system knows a file by. It stays when the file
+    /// is renamed, and a file written anew gets another.
+    func fileNumber(_ path: String) -> Int? {
+        return (try? FileManager.default.attributesOfItem(atPath: path))?[.systemFileNumber] as? Int
     }
 
     say("-- a shortcut is made in SuperSurfer's menu")
@@ -1256,6 +1378,9 @@ func testShortcuts(
     }
 
     var inDock: String?
+    // The names under which the Dock may list that shortcut: after a rename
+    // it keeps the old one until the icon is clicked.
+    var dockNames: [String] = []
     if onDock {
         // The real thing for one of them: an icon in the Dock.
         let entry = "<dict><key>tile-data</key><dict><key>file-data</key><dict>"
@@ -1264,6 +1389,7 @@ func testShortcuts(
         run("/usr/bin/defaults", ["write", "com.apple.dock", "persistent-apps", "-array-add", entry])
         run("/usr/bin/killall", ["Dock"])
         let name = "\(browser.shortName) \(second).app"
+        dockNames = [name]
         let shown = waitUntil(40) {
             appIcons().contains { $0.url?.lastPathComponent == name }
         }
@@ -1284,8 +1410,8 @@ func testShortcuts(
     /// its icon; otherwise Launch Services is asked to start the app, which
     /// is what the Dock does with the click.
     func use(_ profile: String) {
-        let name = "\(browser.shortName) \(profile).app"
-        if profile == inDock, let spot = appIcons().first(where: { $0.url?.lastPathComponent == name })?.centre {
+        if profile == inDock,
+           let spot = appIcons().first(where: { dockNames.contains($0.url?.lastPathComponent ?? "") })?.centre {
             // Once in some dozen clicks the Dock of a test machine starts
             // nothing. Whether it did shows in SuperSurfer's trace, and only
             // a click that never got that far is repeated.
@@ -1340,6 +1466,105 @@ func testShortcuts(
     }
     stays("and there are still three windows", of: app, for: 1.5) {
         hasWindows(3)
+    }
+
+    say("-- a shortcut gets a name of the user's choosing in SuperSurfer's menu")
+    let chosen = "\(browser.shortName) Work"
+    let oldBundle = bundle(second)
+    let sameFile = fileNumber(oldBundle)
+    let oldName = titles[second] ?? "?"
+    // The Dock's picture of it, to see further down whether the Dock takes
+    // up the new one. That is looked at, not insisted on.
+    let pictureBefore = inDock == nil ? nil : dockPicture(named: "\(oldName).app")
+    chooseInDockShortcuts(
+        [profileEntry(browser.name, second), entryTitled(["Rename…", "Umbenennen …"])],
+        what: "\(browser.name), \(second), Rename"
+    )
+    answerQuestion(with: chosen, button: ["Rename", "Umbenennen"])
+    titles[second] = chosen
+    let renamed = waitUntil(10) {
+        FileManager.default.isExecutableFile(atPath: bundle(second) + "/Contents/MacOS/shortcut")
+            && !FileManager.default.fileExists(atPath: oldBundle)
+    }
+    if !renamed {
+        let found = (try? FileManager.default.contentsOfDirectory(atPath: shortcuts)) ?? []
+        stop("no app at \(bundle(second)) in place of the old one; the folder has \(found)")
+    }
+    say("ok    it is \(chosen).app now")
+    let followed = waitUntil(10) {
+        noted(second, "CFBundleName") == chosen && noted(second, "SuperSurferBadge") == "W"
+    }
+    let picture = noted(second, "CFBundleIconFile") ?? "?"
+    let pictureIsNew = picture != "shortcut"
+        && FileManager.default.fileExists(atPath: bundle(second) + "/Contents/Resources/\(picture).icns")
+    if !followed || !pictureIsNew || sameFile == nil || fileNumber(bundle(second)) != sameFile {
+        stop("its inside did not follow: name \(noted(second, "CFBundleName") ?? "?"), "
+            + "letters \(noted(second, "SuperSurferBadge") ?? "?"), picture \(picture), "
+            + "the file it was: \(fileNumber(bundle(second)) == sameFile)")
+    }
+    say("ok    the same app as before, with W on a new picture")
+    if inDock != nil {
+        // The Dock goes on listing the app under its old name for the time
+        // being. It finds it all the same, because it knows the file and
+        // not only where it was: seen on macOS 15 and 26. From the click on
+        // it has the new name.
+        dockNames.append("\(chosen).app")
+        calculatorInFront()
+        use(second)
+        expect("a click on its Dock icon still brings the window of \(second) forward", of: app, within: 20) {
+            inFront("sst-second")
+        }
+        let held = waitUntil(10) {
+            appIcons().contains { $0.url?.lastPathComponent == "\(chosen).app" }
+        }
+        if !held {
+            stop("after that click the Dock does not hold \(chosen).app; it holds \(appIcons().map { $0.url?.lastPathComponent ?? $0.title })")
+        }
+        say("ok    and from then on the Dock holds it as \(chosen).app")
+        // macOS 26 drew the new picture within seconds of the rename, and
+        // macOS 15 after this click.
+        if let changed = pointsThatDiffer(pictureBefore, dockPicture(named: "\(chosen).app")) {
+            say("      the Dock's picture of it has \(changed == 0 ? "not changed" : "changed, in \(changed) points")")
+        } else {
+            say("      the Dock's picture of it could not be looked at")
+        }
+    }
+    use(third)
+    expect("the window of \(third) is in front", of: app, within: 20) {
+        inFront("sst-third")
+    }
+    use(second)
+    expect("under its new name it brings the window of \(second) forward", of: app, within: 20) {
+        inFront("sst-second")
+    }
+
+    say("-- a name given in the Finder is taken up when the menu opens")
+    let given = "\(browser.shortName) Privat"
+    let nameBefore = bundle(third)
+    titles[third] = given
+    do {
+        try FileManager.default.moveItem(atPath: nameBefore, toPath: bundle(third))
+    } catch {
+        stop("\(nameBefore) could not be renamed: \(error.localizedDescription)")
+    }
+    // The menu makes its entries when it opens, and that is when SuperSurfer
+    // looks at its shortcuts.
+    _ = clickDownMenu([dockShortcutsEntry])
+    pause(0.5)
+    for _ in 1...3 {
+        pressEscape()
+    }
+    let taken = waitUntil(10) {
+        noted(third, "CFBundleName") == given && noted(third, "SuperSurferBadge") == "P"
+    }
+    if !taken {
+        stop("\(given).app was not taken up: name \(noted(third, "CFBundleName") ?? "?"), "
+            + "letters \(noted(third, "SuperSurferBadge") ?? "?")")
+    }
+    say("ok    \(given).app has P on its picture")
+    use(second)
+    expect("the window of \(second) is in front", of: app, within: 20) {
+        inFront("sst-second")
     }
 
     say("-- a link for a profile without a shortcut is left alone")
@@ -1397,7 +1622,7 @@ func testShortcuts(
     if !removed {
         stop("\(bundle(third)) is still there")
     }
-    say("ok    \(browser.shortName) \(third).app is gone, \(browser.shortName) \(second).app is not")
+    say("ok    \(titles[third] ?? "?").app is gone, \(titles[second] ?? "?").app is not")
     if !FileManager.default.fileExists(atPath: bundle(second)) {
         stop("\(bundle(second)) is gone as well")
     }
