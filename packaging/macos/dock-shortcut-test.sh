@@ -20,8 +20,9 @@
 # Two things are only done where CI is set, as on a GitHub runner, because
 # they change the Mac they run on: one shortcut is put into the Dock and
 # clicked there, which restarts the Dock, and a browser that is not running
-# is started, which uses its real profiles: once through a shortcut, and
-# once by choosing a profile in the picker under the name of its shortcut.
+# is started, which uses its real profiles: through a shortcut, and the
+# browser that is run last a second time, by choosing a profile in the
+# picker under the name of its shortcut.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

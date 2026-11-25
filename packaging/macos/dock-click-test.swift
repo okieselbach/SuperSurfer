@@ -998,15 +998,26 @@ struct TestBrowser {
     /// run is behind it was put there before (run 67). Until the answer
     /// comes, nothing SuperSurfer asks macOS for after it happens.
     ///
-    /// When the answer does come is regular. Every start whose browser
-    /// was gone again five seconds after it was answered between five and
-    /// six seconds after the start, with "could not be launched": Edge in
-    /// every run, Chrome in run 68. No start whose browser was still there
-    /// at that time was answered while the test went on. That includes
-    /// Edge in runs 63 and 64, which was quit seven seconds after its
-    /// second start: two minutes later there was still no answer, and
-    /// Chrome, which SuperSurfer was asked for in between, never came.
-    /// So the test quits a browser that SuperSurfer started at once.
+    /// What has been seen of the answer there:
+    ///
+    /// - It came, as "started", when the browser got through its start:
+    ///   Edge in runs 67 and 69 and in some before.
+    /// - It came five to six seconds after the start, as "could not be
+    ///   launched", when the browser was gone again by then: Edge in runs
+    ///   63, 64, 66 and 68, Chrome in runs 68 and 69.
+    /// - It did not come while a browser was there without getting through
+    ///   its start: Edge for 40 s in run 65, Chrome for 40 s in runs 66
+    ///   and 67.
+    /// - It did not come for Edge's second start in runs 63 and 64 either,
+    ///   which was quit seven seconds after the start. Two minutes later
+    ///   there was still no answer, and Chrome, which SuperSurfer was
+    ///   asked for in between, never came.
+    ///
+    /// So a browser that SuperSurfer started is asked to quit two seconds
+    /// after it was seen, which is three seconds after its start. That is
+    /// what the test has always done, and both browsers went at once then.
+    /// Asked half a second after it was seen, in run 69, Edge took more
+    /// than ten seconds to go.
     let chosenInPicker: Bool
 }
 
@@ -1940,9 +1951,8 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
-        // At once: macOS answers this start only if the browser is gone
-        // five seconds after it. See `TestBrowser.chosenInPicker`.
-        pause(0.5)
+        // Two seconds and no other time: see `TestBrowser.chosenInPicker`.
+        pause(2)
         quit()
         guard browser.chosenInPicker else {
             return

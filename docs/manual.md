@@ -219,7 +219,7 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 
 **The picker does not appear (macOS)** — the app the link is in may use ⌥-click itself. Choose another **Picker Key** in the menu.
 
-**No link opens any more, in any browser (macOS)** — macOS takes what SuperSurfer asks it to open one request at a time, and each waits until the browser has answered. A browser that has not got past its start, for instance one that is waiting with a question before its first window, holds up everything behind it. Answer the question or quit that browser. If links still do not open, quit SuperSurfer and open it again. This was seen with Edge on a test machine, not on a Mac in use; the [README](../README.md#menu-bar-app-macos) has what was seen.
+**No link opens any more, in any browser (macOS)** — macOS takes what SuperSurfer asks it to open one request at a time, and each waits until macOS can say how the start of the browser went. A browser that does not get through its start, for instance one that is waiting with a question before its first window, holds up everything behind it. Answer its question. If links still do not open, quit SuperSurfer and open it again. This was seen with Edge and Chrome on a test machine, not on a Mac in use; the [README](../README.md#menu-bar-app-macos) has what was seen.
 
 **A saved rule is ignored** — a `handlers` entry in `config.js` matches the same link and comes first. `supersurfer test <url>` prints a `rule:` line when a saved rule decided.
 
