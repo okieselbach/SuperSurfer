@@ -1593,6 +1593,43 @@ func testShortcuts(
         inFront("sst-second")
     }
 
+    // TEMPORARY, to be removed again: run 45609609073 failed right above on
+    // macOS 15. The browser had been hidden a hundredth of a second after
+    // its window came out of the Dock, and the click that followed was not
+    // answered for twenty seconds. Is it that, and does a moment in between
+    // change it?
+    for settle in [0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 1.5, 1.5, 1.5, 1.5] {
+        if let minimized = window(of: app, showing: "sst-third") {
+            AXUIElementSetAttributeValue(minimized, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+        }
+        let stowed = waitUntil(10) { minimizedWindows(app) == 1 }
+        calculatorInFront()
+        use(third)
+        let back = waitUntil(20) { inFront("sst-third") && minimizedWindows(app) == 0 }
+        pause(settle)
+        app.hide()
+        let hidden = waitUntil(10) { app.isHidden }
+        pause(1)
+        let askedBefore = asked()
+        let began = Date()
+        use(second)
+        lastClick = nil
+        let shown = waitUntil(25) { inFront("sst-second") }
+        say(String(
+            format: "      [hide] %.1f s after the window was back: stowed %@, back %@, hidden %@, the click reached SuperSurfer %@, shown again %@ after %.1f s",
+            settle, "\(stowed)", "\(back)", "\(hidden)", "\(asked() > askedBefore)", "\(shown)", Date().timeIntervalSince(began)
+        ))
+        if !shown {
+            say("      [hide] \(state(of: app))")
+            say("      [hide] \(ownAccount(of: app))")
+            // So that the next round starts from where the others do.
+            app.unhide()
+            app.activate(options: [])
+            pause(4)
+            say("      [hide] helped along: \(state(of: app))")
+        }
+    }
+
     say("-- a profile without a window gets one")
     if let closing = window(of: app, showing: "sst-third"), let button = value(closing, kAXCloseButtonAttribute) {
         AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
