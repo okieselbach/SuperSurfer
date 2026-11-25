@@ -642,6 +642,7 @@ final class DockClickController {
             }
             DispatchQueue.main.async {
                 guard self.stillWanted(press, app), !app.isHidden else {
+                    DockClickController.trace("\(app.localizedName ?? "?"): left alone after all, \(self.whyNot(press, app))")
                     return
                 }
                 // What hide() returns is not worth reading: it says false
@@ -656,6 +657,7 @@ final class DockClickController {
             }
             DispatchQueue.main.async {
                 guard self.stillWanted(press, app) else {
+                    DockClickController.trace("\(app.localizedName ?? "?"): left alone after all, \(self.whyNot(press, app))")
                     return
                 }
                 self.worker.async {
@@ -691,6 +693,31 @@ final class DockClickController {
             && ProcessInfo.processInfo.systemUptime - press.time < DockClickRules.tooLate
             && spaceChangedAt < press.time
             && NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
+    }
+
+    /// Main thread, for the trace: what that last look found, in words. A
+    /// click that is dropped this late was dropped without a word before,
+    /// and looked like one that had never been seen.
+    private func whyNot(_ press: Press, _ app: NSRunningApplication) -> String {
+        var reasons: [String] = []
+        if press.cancelled {
+            reasons.append("another click followed")
+        }
+        let age = ProcessInfo.processInfo.systemUptime - press.time
+        if age >= DockClickRules.tooLate {
+            reasons.append(String(format: "the click is %.2f s old", age))
+        }
+        if spaceChangedAt >= press.time {
+            reasons.append(String(format: "the Space changed %.2f s after the click began", spaceChangedAt - press.time))
+        }
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.processIdentifier != app.processIdentifier {
+            reasons.append("\(front?.localizedName ?? "nothing") is in front")
+        }
+        if app.isHidden {
+            reasons.append("it is hidden already")
+        }
+        return reasons.isEmpty ? "for a reason that has passed" : reasons.joined(separator: ", ")
     }
 
     private func minimize(_ windows: [AXUIElement], of app: NSRunningApplication) {
