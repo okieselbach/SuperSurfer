@@ -118,6 +118,17 @@ enum ProfileShortcutRules {
         return name.isEmpty ? "Shortcut" : name
     }
 
+    /// The names SuperSurfer gives a shortcut by itself: after browser and
+    /// profile, and where another shortcut has that name, because two
+    /// profiles go by one name, with the profile's folder behind it. Any
+    /// other name is one that somebody chose.
+    static func ownTitles(browser: String, profile: String, directory: String) -> [String] {
+        return [
+            title(browser: browser, profile: profile),
+            title(browser: browser, profile: "\(profile) (\(directory))"),
+        ]
+    }
+
     /// A name the Finder can take, made of what was typed or read: one line,
     /// no "/" or ":", not hidden and not endless. Empty if nothing is left.
     static func fileName(_ text: String) -> String {
@@ -509,13 +520,15 @@ struct ProfileShortcut {
         guard let link = ProfileShortcutRules.link(browser: browser.id, directory: profile.directory) else {
             throw ShortcutError.unusableName(profile.directory)
         }
-        var title = ProfileShortcutRules.title(browser: browser.shortName, profile: profile.name)
+        let own = ProfileShortcutRules.ownTitles(
+            browser: browser.shortName,
+            profile: profile.name,
+            directory: profile.directory
+        )
+        var title = own[0]
         if others.contains(where: { $0.title == title }) {
             // Two profiles of one name: the folder tells them apart.
-            title = ProfileShortcutRules.title(
-                browser: browser.shortName,
-                profile: "\(profile.name) (\(profile.directory))"
-            )
+            title = own[1]
         }
         // The first colour no other shortcut of this browser has.
         let taken = Set(others.filter { $0.browser == browser.id }.map { $0.color })

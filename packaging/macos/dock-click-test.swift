@@ -1232,6 +1232,111 @@ func chooseInDockShortcuts(_ steps: [([AXUIElement]) -> AXUIElement?], what: Str
     stop("SuperSurfer's menu has no \(what) under Dock Shortcuts")
 }
 
+// MARK: - The picker
+
+/// What is at a point of the screen, if it is SuperSurfer's.
+func superSurferElement(at point: CGPoint) -> AXUIElement? {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.supersurfer.app").first else {
+        return nil
+    }
+    var hit: AXUIElement?
+    let asked = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit)
+    guard asked == .success, let element = hit else {
+        return nil
+    }
+    var owner: pid_t = 0
+    guard AXUIElementGetPid(element, &owner) == .success, owner == app.processIdentifier else {
+        return nil
+    }
+    return element
+}
+
+/// Points just beside the pointer. The picker opens with a corner at the
+/// pointer: to the right of it and below, or to the other side where the
+/// screen ends.
+func besideThePointer() -> [CGPoint] {
+    guard let pointer = CGEvent(source: nil)?.location else {
+        return []
+    }
+    let steps: [CGPoint] = [CGPoint(x: 12, y: 12), CGPoint(x: -12, y: 12), CGPoint(x: 12, y: -12), CGPoint(x: -12, y: -12)]
+    return steps.map { CGPoint(x: pointer.x + $0.x, y: pointer.y + $0.y) }
+}
+
+/// The entries of the menu SuperSurfer has up at the pointer. None while
+/// there is no such menu.
+func pickerEntries() -> [AXUIElement] {
+    for point in besideThePointer() {
+        guard var element = superSurferElement(at: point) else {
+            continue
+        }
+        // From the entry at that point up to the menu it is in.
+        for _ in 0..<4 {
+            if text(element, kAXRoleAttribute) == "AXMenu" {
+                return elements(element, kAXChildrenAttribute)
+            }
+            guard let parent = value(element, kAXParentAttribute) else {
+                break
+            }
+            element = parent as! AXUIElement
+        }
+    }
+    return []
+}
+
+func entryTitles(_ entries: [AXUIElement]) -> [String] {
+    return entries.map { text($0, kAXTitleAttribute) ?? "" }
+}
+
+/// Has SuperSurfer show its picker for a link, by way of the clipboard and
+/// the entry its menu has for that, and returns the picker's entries. `mark`
+/// is a part of the link that the first line of the picker shows.
+func openPicker(for link: String, showing mark: String) -> [AXUIElement] {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(link, forType: .string)
+    pause(0.3)
+    let entry = entryTitled(["Choose Browser for Copied Link…", "Browser für kopierten Link wählen …"])
+    guard clickDownMenu([entry]) else {
+        stop("SuperSurfer's menu has no entry that opens the picker")
+    }
+    var entries: [AXUIElement] = []
+    let up = waitUntil(10) {
+        entries = pickerEntries()
+        return (entryTitles(entries).first ?? "").contains(mark)
+    }
+    guard up else {
+        let found = besideThePointer().map { point -> String in
+            guard let element = superSurferElement(at: point) else {
+                return "nothing of SuperSurfer's"
+            }
+            return "\(text(element, kAXRoleAttribute) ?? "?") \"\(text(element, kAXTitleAttribute) ?? "")\""
+        }
+        let own = elements(superSurfer(), kAXChildrenAttribute).map { text($0, kAXRoleAttribute) ?? "?" }
+        for _ in 1...3 {
+            pressEscape()
+        }
+        stop("the picker did not open for \(link). Beside the pointer: \(found). SuperSurfer itself has: \(own)")
+    }
+    return entries
+}
+
+/// Closes the picker without a choice, which opens nothing.
+func closePicker(showing mark: String) {
+    pressEscape()
+    let gone = waitUntil(5) { !(entryTitles(pickerEntries()).first ?? "").contains(mark) }
+    if !gone {
+        stop("the picker did not close")
+    }
+}
+
+/// The entries the picker has for the profiles of a browser: as many as the
+/// browser has profiles, right below the entry for the browser itself.
+func profileBlock(_ entries: [AXUIElement], below browser: String, count: Int) -> [AXUIElement] {
+    guard count > 0, let header = entryTitles(entries).firstIndex(of: browser), header + count < entries.count else {
+        return []
+    }
+    return Array(entries[(header + 1)...(header + count)])
+}
+
 func testShortcuts(
     _ browser: TestBrowser,
     home: String,
@@ -1361,6 +1466,23 @@ func testShortcuts(
     /// is renamed, and a file written anew gets another.
     func fileNumber(_ path: String) -> Int? {
         return (try? FileManager.default.attributesOfItem(atPath: path))?[.systemFileNumber] as? Int
+    }
+    /// What SuperSurfer's menus are to call a profile whose shortcut got a
+    /// name of the user's choosing, by the profile's folder: that name
+    /// without the browser in front.
+    var chosenNames: [String: String] = [:]
+    /// What they are to call a profile that is named as `given`. SuperSurfer
+    /// looks for a profile of that name first, and for one in a folder of
+    /// that name after.
+    func shown(_ given: String) -> String {
+        var folder = names.first(where: { $0.value == given })?.key
+        if folder == nil, names[given] != nil {
+            folder = given
+        }
+        guard let found = folder else {
+            return given
+        }
+        return chosenNames[found] ?? names[found] ?? given
     }
 
     say("-- a shortcut is made in SuperSurfer's menu")
@@ -1567,6 +1689,77 @@ func testShortcuts(
         inFront("sst-second")
     }
 
+    say("-- the picker calls a profile what its shortcut is called")
+    chosenNames = ["Profile 1": "Work", "Profile 2": "Privat"]
+    // Three sites with a saved rule each. The first names the profile the
+    // way the browser does, which is what the picker saves. The others name
+    // a folder, as config.js may: the folder of the profile that has no
+    // shortcut, and the folder "Profile 2". Chrome calls the profile in
+    // that folder "Person 2". Edge calls it "Profile 3", and "Profile 2" is
+    // what Edge calls the profile in the folder "Profile 1". SuperSurfer
+    // goes by the name before the folder, so in Edge that rule means the
+    // second profile.
+    let ruled = [("sst-name.example", second), ("sst-first.example", "Default"), ("sst-folder.example", "Profile 2")]
+    let savedRules: [String: Any] = [
+        "version": 1,
+        "rules": ruled.map { ["domain": $0.0, "browser": browser.id, "profile": $0.1] },
+    ]
+    do {
+        let file = URL(fileURLWithPath: home + "/Library/Application Support/SuperSurfer/rules.json")
+        try JSONSerialization.data(withJSONObject: savedRules).write(to: file)
+    } catch {
+        stop("rules.json could not be written: \(error.localizedDescription)")
+    }
+    let inOrder = names.values.map { shown($0) }.sorted { $0.lowercased() < $1.lowercased() }
+    for (domain, profile) in ruled {
+        let entries = openPicker(for: "https://\(domain)/page", showing: domain)
+        // Read while the picker is up: its entries are gone with it.
+        let all = entryTitles(entries)
+        let block = profileBlock(entries, below: browser.name, count: names.count)
+        let below = entryTitles(block)
+        let checked = block
+            .filter { !(text($0, "AXMenuItemMarkChar") ?? "").isEmpty }
+            .map { text($0, kAXTitleAttribute) ?? "" }
+        closePicker(showing: domain)
+        let wanted = shown(profile)
+        let line = all.count > 1 ? all[1] : ""
+        guard below == inOrder else {
+            stop("below \(browser.name) the picker lists \(below) and not \(inOrder). All of it: \(all)")
+        }
+        guard line.hasSuffix("\(browser.name) (\(wanted))") else {
+            stop("for a rule that names \"\(profile)\" the picker says \"\(line)\" and not \(browser.name) (\(wanted))")
+        }
+        guard checked == [wanted] else {
+            stop("for a rule that names \"\(profile)\" the picker has its checkmark at \(checked) and not at \(wanted)")
+        }
+        say("ok    a rule that names \"\(profile)\": \(line), checkmark at \(wanted)")
+    }
+    say("ok    its profiles are listed as \(inOrder)")
+
+    // The list of saved rules says it the same way.
+    let rulesEntry: ([AXUIElement]) -> AXUIElement? = { entries in
+        entries.first { entry in
+            let title = text(entry, kAXTitleAttribute) ?? ""
+            return title.hasPrefix("Saved Rules") || title.hasPrefix("Gemerkte Regeln")
+        }
+    }
+    guard clickDownMenu([rulesEntry]) else {
+        stop("SuperSurfer's menu has no Saved Rules")
+    }
+    let rulesShown = entryTitles(rulesEntry(statusMenuEntries())
+        .map { elements($0, kAXChildrenAttribute).flatMap { elements($0, kAXChildrenAttribute) } } ?? [])
+    for _ in 1...3 {
+        pressEscape()
+    }
+    for (domain, profile) in ruled where !rulesShown.contains("\(domain) → \(browser.name) (\(shown(profile)))") {
+        stop("Saved Rules has no \"\(domain) → \(browser.name) (\(shown(profile)))\"; it has \(rulesShown)")
+    }
+    say("ok    and so does the list of saved rules")
+    use(second)
+    expect("the window of \(second) is in front", of: app, within: 20) {
+        inFront("sst-second")
+    }
+
     say("-- a link for a profile without a shortcut is left alone")
     run("/usr/bin/open", ["-g", "-a", superSurfer, "supersurfer://profile/\(browser.id)/Default"])
     stays("the window of \(second) stays in front", of: app, for: 3) {
@@ -1626,6 +1819,7 @@ func testShortcuts(
     if !FileManager.default.fileExists(atPath: bundle(second)) {
         stop("\(bundle(second)) is gone as well")
     }
+    chosenNames["Profile 2"] = nil
 
     quit()
     if startToo {
@@ -1646,6 +1840,46 @@ func testShortcuts(
             stop("\(browser.name) was not started with the profile: \(arguments.isEmpty ? "not running" : arguments)")
         }
         say("ok    \(browser.shortName) was started with --profile-directory=Profile 1")
+        pause(2)
+        quit()
+
+        // The entry says "Work". What SuperSurfer hands on has to be the
+        // profile behind it, by the name the browser has for it.
+        say("-- a profile chosen in the picker under its shortcut's name is the one that opens")
+        let page = "sst-second.html"
+        let entries = openPicker(for: URL(fileURLWithPath: pages + "/" + page).absoluteString, showing: page)
+        let block = profileBlock(entries, below: browser.name, count: names.count)
+        guard let work = block.first(where: { text($0, kAXTitleAttribute) == "Work" }), let spot = middle(of: work) else {
+            let below = entryTitles(block)
+            let all = entryTitles(entries)
+            closePicker(showing: page)
+            stop("the picker has no Work below \(browser.name): \(below) of \(all)")
+        }
+        post(.mouseMoved, at: spot)
+        pause(0.3)
+        press(at: spot)
+        var startedWith = ""
+        let opened = waitUntil(40) {
+            guard let pid = running()?.processIdentifier else {
+                return false
+            }
+            startedWith = outputOf("/bin/ps", ["-ww", "-o", "args=", "-p", "\(pid)"])
+            return startedWith.contains("--profile-directory=Profile 1") && startedWith.contains(page)
+        }
+        if !opened {
+            stop("\(browser.name) was not started with the profile and the link: \(startedWith.isEmpty ? "not running" : startedWith)")
+        }
+        say("ok    \(browser.shortName) was started with --profile-directory=Profile 1 and the link")
+        // Where the link went is listed under the same name.
+        _ = clickDownMenu([])
+        let recent = entryTitles(statusMenuEntries())
+        for _ in 1...3 {
+            pressEscape()
+        }
+        guard recent.contains(where: { $0.hasSuffix("→ \(browser.name) (Work)") }) else {
+            stop("Recent Links has no entry that ends in \(browser.name) (Work): \(recent)")
+        }
+        say("ok    and Recent Links has it as \(browser.name) (Work)")
         pause(2)
         quit()
     }

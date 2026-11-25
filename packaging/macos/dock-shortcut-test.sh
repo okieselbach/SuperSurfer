@@ -8,9 +8,10 @@
 # checks that the window of the right profile is in front: from behind
 # another app, out of the Dock, with the browser hidden, and for a profile
 # that has no window. One shortcut gets another name in the menu and one in
-# the way the Finder renames, and both have to work on under it. The pointer
-# moves and windows come and go while it runs, so keep your hands off the Mac
-# for the five minutes it takes.
+# the way the Finder renames, and both have to work on under it. The picker
+# and the lists in the menu then have to call the two profiles by those
+# names. The pointer moves and windows come and go while it runs, so keep
+# your hands off the Mac for the five minutes it takes.
 #
 # Needs what dock-click-test.sh needs: a logged-in session in which this
 # shell may use Accessibility. Edge, Chrome and SuperSurfer must not be
@@ -19,7 +20,8 @@
 # Two things are only done where CI is set, as on a GitHub runner, because
 # they change the Mac they run on: one shortcut is put into the Dock and
 # clicked there, which restarts the Dock, and a browser that is not running
-# is started through a shortcut, which uses its real profiles.
+# is started, which uses its real profiles: once through a shortcut, and
+# once by choosing a profile in the picker under the name of its shortcut.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
