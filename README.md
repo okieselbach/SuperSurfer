@@ -175,6 +175,15 @@ Choose a profile under **Dock Shortcuts** and SuperSurfer writes a small app for
 
 Like Dock Click this has nothing to do with routing links, and none of it runs until a shortcut is clicked or the menu is opened.
 
+**A name of your own.** A shortcut is first called what the browser calls the profile: "Edge Oliver", with an O on its icon. If that profile is "Work" to you, give the shortcut that name in one of two ways:
+
+- choose the profile under **Dock Shortcuts**, then **Rename…**, or
+- rename the app in the Finder. SuperSurfer takes the name up the next time its menu opens or the shortcut is clicked.
+
+The icon then carries the first letter of the name, not counting the browser in front: W for "Edge Work". The name is only a name. Which profile the shortcut opens is noted inside it and stays the same, and the menu goes on listing the profile as the browser calls it, with the shortcut's name behind an arrow: *Oliver → Edge Work*. An empty name in **Rename…** goes back to the first one.
+
+A shortcut that is in the Dock stays there when it is renamed. The Dock goes on showing the old name until the shortcut is clicked the next time. The new picture was there within seconds on macOS 26, and after that click on macOS 15.
+
 **How it works.** The app is a few lines of shell script that tell SuperSurfer which profile is wanted. SuperSurfer then chooses that profile in the browser's own *Profiles* menu, and the browser does what it does when you choose it there yourself. The title of a window would be no help: Edge leaves the profile's name out of it for its first profile.
 
 **Permission.** Choosing an entry in another app's menu takes the Accessibility permission, the one Dock Click uses; macOS asks for it when a shortcut is made. Without it a shortcut still works, but every click opens a new window of the profile, and the menu entry carries a ⚠︎. What the app's signature does to this permission after an update is described under [Dock Click](#dock-click).
@@ -183,7 +192,7 @@ Like Dock Click this has nothing to do with routing links, and none of it runs u
 
 - A shortcut is an icon of its own. While the browser runs, the browser's icon is in the Dock as well, and the dot for a running app is under that one.
 - The click first starts the small app. On GitHub's macOS runners that took 0.1 to 0.2 s, and two to three seconds the first time a new shortcut was used. SuperSurfer then needed another 0.01 to 0.3 s, most of it waiting for the browser.
-- A shortcut remembers the folder the browser keeps the profile in, so renaming the profile does not break it. Its own name and badge stay as they were: remove it and make it again for new ones.
+- A shortcut remembers the folder the browser keeps the profile in, so renaming the profile in the browser does not break it. Its own name stays what it is until you change it.
 - **Remove Shortcut** deletes the app. The Dock keeps a question mark in its place until you drag that out.
 
 **Signed-in profiles.** The *Profiles* menu does not always list a profile under its name. For a profile that is signed in to an account, Chrome shows the account's name, or both, as "Ada (Work)", and a name an organization gave the profile in place of the profile's own. SuperSurfer works out which of these to expect the way Chromium's source does, looks for the other forms after that, and then for an entry that has the profile's name in it as a word of its own. If no entry fits, or more than one, it opens a new window of the profile instead and writes the entries it saw to the system log:
@@ -196,7 +205,7 @@ The same command shows it when a shortcut could not reach SuperSurfer at all, fo
 
 **Which browsers.** Edge and Chrome. Their Beta and Canary builds and Chromium have the same menu and are offered as well, untried. Firefox is not offered: it runs every profile as an app of its own, which has its own Dock icon while it runs. Safari is not offered either: its profiles cannot be reached from outside.
 
-**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It runs in CI on macOS 15 and has passed on GitHub's macOS 26 runner. Not tested: profiles that are signed in to an account (the rule for their names follows Chromium's source and is checked against made-up data; what Edge does with a Microsoft account is not known), a browser in another language, the Beta and Canary builds, and macOS 27.
+**Tested, and not.** `packaging/macos/dock-shortcut-test.sh` starts Edge and Chrome with three profiles each, makes shortcuts in the menu and uses them in each of the situations above. It renames one of them in the menu while it is in the Dock and one the way the Finder does, and goes on with both. It runs in CI on macOS 15 and has passed on GitHub's macOS 26 runner. Not tested: profiles that are signed in to an account (the rule for their names follows Chromium's source and is checked against made-up data; what Edge does with a Microsoft account is not known), a browser in another language, the Beta and Canary builds, and macOS 27. Whether the Dock draws the new picture of a shortcut that was renamed in the Finder before SuperSurfer could take the name up, and so changes its picture without changing its name, has not been looked at either.
 
 ## Saved rules (`rules.json`)
 

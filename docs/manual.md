@@ -155,7 +155,9 @@ A click on it brings the window of that profile to the front. If the profile has
 - The first time, macOS asks for the Accessibility permission: System Settings → Privacy & Security → **Accessibility**, switch on SuperSurfer. Without it every click opens a new window instead of bringing the one that is there forward, and the menu entry shows ⚠︎.
 - The shortcut is an extra icon, not the browser. While the browser runs, its own icon is in the Dock as well.
 - To get rid of a shortcut, choose its profile under **Dock Shortcuts** again and then **Remove Shortcut**. The Dock keeps a question mark where it was; drag that out.
-- A shortcut keeps working when its profile is renamed. Remove it and make it again if the new name should be on it.
+- To call a shortcut what you call the profile, choose its profile under **Dock Shortcuts** and then **Rename…**, or rename the app in the Finder. Its icon gets the first letter of the new name, not counting the browser in front: W for "Edge Work". Which profile it opens stays the same. The menu lists the profile as the browser calls it, with the shortcut's name behind an arrow.
+- A renamed shortcut stays in the Dock. The Dock shows the new name, and on older systems the new picture, once the shortcut has been clicked again.
+- A shortcut keeps working when its profile is renamed in the browser.
 
 ## Saved rules
 
