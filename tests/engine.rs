@@ -753,18 +753,21 @@ fn dock_shortcuts_are_offered_for_profiles_of_browsers_with_a_profile_menu() {
         json!([
             {
                 "name": "Personal",
+                "chosenName": null,
                 "directory": "Default",
                 "menuTitles": ["Personal"],
                 "launchArgs": ["--profile-directory=Default"],
             },
             {
                 "name": "personal",
+                "chosenName": null,
                 "directory": "Profile 7",
                 "menuTitles": ["personal"],
                 "launchArgs": ["--profile-directory=Profile 7"],
             },
             {
                 "name": "Work",
+                "chosenName": null,
                 "directory": "Profile 1",
                 "menuTitles": ["Ada (Work)", "Work", "Ada"],
                 "launchArgs": ["--profile-directory=Profile 1"],
@@ -776,6 +779,195 @@ fn dock_shortcuts_are_offered_for_profiles_of_browsers_with_a_profile_menu() {
     assert!(browsers
         .iter()
         .all(|browser| browser["id"] != "firefox" && browser["id"] != "safari"));
+}
+
+/// Dock shortcuts in the sandbox, as the macOS app writes them: each a small
+/// app whose Info.plist says which profile it is for. They go away however
+/// the test ends, because every test shares the sandbox.
+#[cfg(target_os = "macos")]
+struct ShortcutsPlanted {
+    folder: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl ShortcutsPlanted {
+    fn new() -> Self {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("the sandbox sets HOME"));
+        let folder = home.join("Applications/SuperSurfer Shortcuts");
+        let _ = fs::remove_dir_all(&folder);
+        ShortcutsPlanted { folder }
+    }
+
+    /// The shortcut SuperSurfer makes for the profile that Chrome keeps in
+    /// `directory` and calls `profile`, under the name it gets at first.
+    fn plant(&self, directory: &str, profile: &str) {
+        let contents = self
+            .folder
+            .join(format!("Chrome {profile}.app"))
+            .join("Contents");
+        fs::create_dir_all(&contents).unwrap();
+        fs::write(
+            contents.join("Info.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Chrome {profile}</string>
+	<key>SuperSurferBrowser</key>
+	<string>chrome</string>
+	<key>SuperSurferProfileDirectory</key>
+	<string>{directory}</string>
+	<key>SuperSurferProfileName</key>
+	<string>{profile}</string>
+	<key>SuperSurferBrowserPath</key>
+	<string>/Applications/Google Chrome.app</string>
+	<key>SuperSurferBrowserNames</key>
+	<array>
+		<string>Chrome</string>
+		<string>Google Chrome</string>
+	</array>
+</dict>
+</plist>
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    /// What a rename in the Finder does: the app gets another name, and
+    /// nothing inside it changes.
+    fn rename(&self, from: &str, to: &str) {
+        fs::rename(
+            self.folder.join(format!("{from}.app")),
+            self.folder.join(format!("{to}.app")),
+        )
+        .unwrap();
+    }
+
+    fn remove(&self, title: &str) {
+        fs::remove_dir_all(self.folder.join(format!("{title}.app"))).unwrap();
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for ShortcutsPlanted {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.folder);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_profile_goes_by_the_name_its_dock_shortcut_was_given() {
+    let (sandbox, _guard) = sandbox();
+    if !sandbox.browsers.iter().any(|id| id == "chrome") {
+        eprintln!("skipped: Google Chrome is not installed on this machine");
+        return;
+    }
+    let shortcuts = ShortcutsPlanted::new();
+    shortcuts.plant("Default", "Personal");
+    shortcuts.plant("Profile 1", "Work");
+    // The user calls the first profile "Home". The second shortcut keeps
+    // the name SuperSurfer gave it, which nobody chose.
+    shortcuts.rename("Chrome Personal", "Chrome Home");
+
+    let chosen_names = |engine: &mut Engine| -> Value {
+        let reply = call(engine, json!({ "op": "shortcuts" }));
+        let chrome = reply["browsers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|browser| browser["id"] == "chrome")
+            .expect("Chrome is offered")
+            .clone();
+        // By the browser's name: "Personal" (Default), then "Work".
+        json!([
+            chrome["profiles"][0]["chosenName"],
+            chrome["profiles"][1]["chosenName"]
+        ])
+    };
+    let arguments = |engine: &mut Engine, profile: &str| -> Value {
+        let reply = call(
+            engine,
+            json!({ "op": "plan", "url": "https://example.com/", "browser": "chrome", "profile": profile }),
+        );
+        reply["launch"]["args"].clone()
+    };
+
+    // config.js names the profile the user's way, capitals aside.
+    let mut engine = engine_with_default("chrome:home");
+    let reply = route(&mut engine, "https://example.com/");
+    assert_eq!(reply["decision"]["profile"], "home", "{reply}");
+    assert_eq!(
+        reply["launch"]["args"],
+        json!(["--profile-directory=Default"]),
+        "{reply}"
+    );
+    let status = call(&mut engine, json!({ "op": "status" }));
+    assert_eq!(status["defaultBrowser"], "Google Chrome (home)", "{status}");
+    assert_eq!(status["defaultBrowserProfile"], "home", "{status}");
+
+    // The menus are told what each profile is called.
+    assert_eq!(chosen_names(&mut engine), json!(["Home", null]));
+
+    // What the browser calls a profile, and its folder, go on working.
+    for (profile, folder) in [
+        ("Home", "Default"),
+        ("Personal", "Default"),
+        ("Default", "Default"),
+        ("Work", "Profile 1"),
+        ("Profile 1", "Profile 1"),
+    ] {
+        assert_eq!(
+            arguments(&mut engine, profile),
+            json!([format!("--profile-directory={folder}")]),
+            "{profile}"
+        );
+    }
+
+    // Renamed again: whatever is asked next goes by the new name.
+    shortcuts.rename("Chrome Home", "Chrome Office");
+    assert_eq!(chosen_names(&mut engine), json!(["Office", null]));
+    assert_eq!(
+        arguments(&mut engine, "office"),
+        json!(["--profile-directory=Default"])
+    );
+
+    // And again, with an "ü" the way a Mac's disk may hand it back: a "u"
+    // and the dots after it. A saved rule names the profile by it, with the
+    // "ü" in one piece. The name is known with the next link: the engine
+    // sees that the folder of shortcuts is not what it was.
+    shortcuts.rename("Chrome Office", "Chrome Bu\u{308}ro");
+    fs::write(
+        rules_path(),
+        "{ \"rules\": [ { \"domain\": \"example.net\", \"browser\": \"chrome\", \"profile\": \"B\u{fc}ro\" } ] }",
+    )
+    .unwrap();
+    let reply = route(&mut engine, "https://example.net/");
+    assert_eq!(reply["decision"]["source"], "rule", "{reply}");
+    assert_eq!(reply["decision"]["profile"], "B\u{fc}ro", "{reply}");
+    assert_eq!(
+        reply["launch"]["args"],
+        json!(["--profile-directory=Default"]),
+        "{reply}"
+    );
+    // The name before that one is no name any more. An unknown profile is
+    // left out, as it always was.
+    let reply = route(&mut engine, "https://example.com/");
+    assert_eq!(reply["decision"]["profile"], "home", "{reply}");
+    assert_eq!(reply["launch"]["args"], json!([]), "{reply}");
+
+    // A shortcut called what another profile is called says nothing about
+    // its own: "work" stays the profile that Chrome calls "Work".
+    shortcuts.remove("Chrome Work");
+    shortcuts.rename("Chrome Bu\u{308}ro", "Chrome work");
+    assert_eq!(chosen_names(&mut engine), json!([null, null]));
+    assert_eq!(
+        arguments(&mut engine, "work"),
+        json!(["--profile-directory=Profile 1"])
+    );
 }
 
 #[test]

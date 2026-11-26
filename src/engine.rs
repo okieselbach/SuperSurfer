@@ -57,7 +57,8 @@ pub enum Request {
     /// Installed browsers and their profiles.
     Browsers,
     /// Browser profiles that can have a shortcut in the Dock, with what the
-    /// shortcut needs to bring a profile's window to the front.
+    /// shortcut needs to bring a profile's window to the front, and with
+    /// what the user calls each profile.
     Shortcuts,
     /// Saved rules from `rules.json`.
     Rules,
@@ -252,6 +253,11 @@ pub struct BrowsersReply {
 #[serde(rename_all = "camelCase")]
 pub struct ShortcutProfile {
     pub name: String,
+    /// What the user calls the profile, where that is something else: the
+    /// name they gave its Dock shortcut, without the browser in front.
+    /// `config.js` and `rules.json` may name the profile by it, and the
+    /// menus show it.
+    pub chosen_name: Option<String>,
     /// The folder the browser keeps the profile in. Unlike the name it never
     /// changes, so it is what a shortcut remembers.
     pub directory: String,
@@ -341,6 +347,11 @@ pub struct Engine {
     /// broken config is parsed again only after it changed.
     config_attempt: Option<FileStamp>,
     rules_stamp: FileStamp,
+    /// Where the macOS app keeps its Dock shortcuts, and what that folder
+    /// looked like when their names were last read. The name of a shortcut
+    /// is a name for its profile, in the menus and in `config.js`.
+    shortcuts_folder: Option<PathBuf>,
+    shortcuts_stamp: FileStamp,
     config_error: Option<String>,
     registry_checked: Instant,
     /// False until the browser list has been rebuilt without the on-disk cache
@@ -366,6 +377,8 @@ impl Engine {
             paths: None,
             config_attempt: None,
             rules_stamp: None,
+            shortcuts_folder: None,
+            shortcuts_stamp: None,
             config_error: None,
             registry_checked: Instant::now(),
             registry_fresh: false,
@@ -490,7 +503,7 @@ impl Engine {
             let mut browsers = registry
                 .list()
                 .into_iter()
-                .filter_map(shortcut_browser)
+                .filter_map(|install| shortcut_browser(registry, install))
                 .collect::<Vec<_>>();
             browsers.sort_by_cached_key(|browser| browser.name.to_lowercase());
             let mut blocked: Vec<String> = registry
@@ -665,7 +678,7 @@ impl Engine {
     }
 
     /// Bring the loaded state in line with the files on disk. Costs two
-    /// `stat` calls when nothing changed.
+    /// `stat` calls when nothing changed, and on macOS a third.
     fn refresh(&mut self) {
         if !self.bootstrapped {
             self.bootstrapped = true;
@@ -679,6 +692,7 @@ impl Engine {
                 Ok(config) => {
                     let rules = RuleSet::path_beside(&config);
                     self.paths = Some(Paths { config, rules });
+                    self.shortcuts_folder = BrowserRegistry::chosen_names_folder();
                 }
                 Err(err) => {
                     self.config_error = Some(format!("{err:#}"));
@@ -691,6 +705,9 @@ impl Engine {
         };
         let config_now = stamp(&paths.config);
         let rules_now = stamp(&paths.rules);
+        // Taken before the names are read. A change in between then shows as
+        // one more change, never as none.
+        let shortcuts_now = self.shortcuts_folder.as_deref().and_then(stamp);
 
         if self.config_attempt != Some(config_now) {
             self.config_attempt = Some(config_now);
@@ -701,6 +718,8 @@ impl Engine {
                     self.config_error = None;
                     self.registry_checked = Instant::now();
                     self.registry_fresh = false;
+                    // A new view of the browsers comes with the names.
+                    self.shortcuts_stamp = shortcuts_now;
                 }
                 Err(err) => {
                     // Keep routing with whatever loaded before; a typo in
@@ -714,6 +733,15 @@ impl Engine {
             self.rules_stamp = rules_now;
             if let Some(router) = self.router.as_mut() {
                 router.reload_rules();
+            }
+        }
+
+        // A Dock shortcut was made, renamed or removed: the profile it is
+        // for goes by another name from this link on.
+        if shortcuts_now != self.shortcuts_stamp {
+            self.shortcuts_stamp = shortcuts_now;
+            if let Some(router) = self.router.as_mut() {
+                router.refresh_chosen_names();
             }
         }
     }
@@ -910,7 +938,10 @@ fn browser_info(install: &BrowserInstall) -> Option<BrowserInfo> {
     })
 }
 
-fn shortcut_browser(install: &BrowserInstall) -> Option<ShortcutBrowser> {
+fn shortcut_browser(
+    registry: &BrowserRegistry,
+    install: &BrowserInstall,
+) -> Option<ShortcutBrowser> {
     if !has_profile_menu(&install.id) {
         return None;
     }
@@ -923,6 +954,9 @@ fn shortcut_browser(install: &BrowserInstall) -> Option<ShortcutBrowser> {
             let launch_args = launch::profile_window_args(&install.id, &directory)?;
             Some(ShortcutProfile {
                 name: profile.name.clone(),
+                chosen_name: registry
+                    .chosen_name(&install.id, &directory)
+                    .map(str::to_string),
                 menu_titles: profile.menu_titles_or_name(),
                 launch_args,
                 directory,
