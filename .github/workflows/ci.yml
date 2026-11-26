@@ -2,8 +2,7 @@ name: CI
 
 on:
   push:
-    # The second branch is here only while its change is tried on a Mac.
-    branches: [main, claude/youthful-sagan-j5h2me]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
