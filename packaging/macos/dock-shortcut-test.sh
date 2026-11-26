@@ -20,9 +20,14 @@
 # Two things are only done where CI is set, as on a GitHub runner, because
 # they change the Mac they run on: one shortcut is put into the Dock and
 # clicked there, which restarts the Dock, and a browser that is not running
-# is started, which uses its real profiles: through a shortcut, and the
-# browser that is run last a second time, by choosing a profile in the
-# picker under the name of its shortcut.
+# is started, which uses its real profiles: through a shortcut, and a
+# second time by choosing a profile in the picker under the name of its
+# shortcut.
+#
+# The last step is about what SuperSurfer does when macOS does not answer a
+# start. It has SuperSurfer start an app that only sleeps, and then sends a
+# link that goes to Safari, which has to open it all the same. It needs
+# neither Edge nor Chrome, and it opens one page in Safari.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -55,6 +60,8 @@ cleanup() {
       tries=$((tries + 1))
     done
   fi
+  # The app that only sleeps, if the test did not get to end it.
+  pkill -f '^/bin/sleep 317$' 2>/dev/null || true
   # How the test went is decided by now, and not by whether this works.
   rm -rf "$SCRATCH" || true
 }
@@ -134,6 +141,12 @@ for BROWSER in edge chrome; do
     break
   fi
 done
+
+# Last, because SuperSurfer is left with a start that macOS never answers.
+if [ "$STATUS" -eq 0 ]; then
+  echo "== a start that macOS does not answer"
+  "$DRIVER" unanswered "$SCRATCH" "$APP" "$TRACE" || STATUS=$?
+fi
 
 kill "$PID" 2>/dev/null || true
 wait "$PID" 2>/dev/null || true

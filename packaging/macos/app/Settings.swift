@@ -110,7 +110,7 @@ enum DefaultBrowser {
         } else {
             // No API before macOS 12: the choice lives in System Preferences.
             if let pane = URL(string: "x-apple.systempreferences:com.apple.preference.general") {
-                NSWorkspace.shared.open(pane)
+                Launcher.show(pane)
             }
             completion(nil)
         }
@@ -129,7 +129,7 @@ enum PrivacySettings {
             address = "x-apple.systempreferences:com.apple.preference.security?Privacy"
         }
         if let pane = URL(string: address) {
-            NSWorkspace.shared.open(pane)
+            Launcher.show(pane)
         }
     }
 
@@ -143,7 +143,7 @@ enum PrivacySettings {
             address = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
         }
         if let pane = URL(string: address) {
-            NSWorkspace.shared.open(pane)
+            Launcher.show(pane)
         }
     }
 }

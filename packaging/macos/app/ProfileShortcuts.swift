@@ -852,7 +852,7 @@ final class ProfileShortcuts {
         if !existing.isEmpty {
             entries.append(.separator())
             entries.append(ActionMenuItem(tr("Show Shortcuts in Finder", "Verknüpfungen im Finder zeigen")) {
-                NSWorkspace.shared.open(ProfileShortcuts.folder)
+                Launcher.show(ProfileShortcuts.folder)
             })
         }
         if needsPermission {
