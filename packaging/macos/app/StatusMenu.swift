@@ -65,7 +65,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         menu.removeAllItems()
         menu.addItem(MenuItems.note("SuperSurfer \(status?.version ?? "")"))
-        if let name = status?.defaultBrowser {
+        if var name = status?.defaultBrowser {
+            // The profile under the name the rest of the menu has for it.
+            if let id = status?.defaultBrowserId, let browser = status?.defaultBrowserName {
+                name = names.label(BrowserTarget(browserId: id, browser: browser, profile: status?.defaultBrowserProfile))
+            }
             menu.addItem(MenuItems.note(tr("Default browser: \(name)", "Standardbrowser: \(name)")))
         }
         if status?.configError != nil {

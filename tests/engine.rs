@@ -309,6 +309,9 @@ fn reply_shapes_match_what_the_app_decodes() {
             "configError",
             "configPath",
             "defaultBrowser",
+            "defaultBrowserId",
+            "defaultBrowserName",
+            "defaultBrowserProfile",
             "freshBootstrap",
             "landingUrl",
             "logPath",
@@ -675,6 +678,36 @@ fn profiles_are_listed_and_turned_into_launch_arguments() {
         reply["launch"]["args"],
         json!(["--profile-directory=Default", "--incognito"])
     );
+}
+
+#[test]
+fn the_default_browser_is_reported_whole_and_in_parts() {
+    let (sandbox, _guard) = sandbox();
+    if !sandbox.browsers.iter().any(|id| id == "chrome") {
+        eprintln!("skipped: Google Chrome is not installed on this machine");
+        return;
+    }
+    // By the folder of the profile, as config.js may name it. The parts keep
+    // it the way it is written: a menu with names of its own for profiles
+    // looks the profile up itself.
+    let mut engine = engine_with_default("chrome:Profile 1");
+    let status = call(&mut engine, json!({ "op": "status" }));
+    let name = status["defaultBrowserName"].as_str().unwrap_or_default();
+    assert!(!name.is_empty(), "{status}");
+    assert_eq!(status["defaultBrowserId"], "chrome", "{status}");
+    assert_eq!(status["defaultBrowserProfile"], "Profile 1", "{status}");
+    assert_eq!(
+        status["defaultBrowser"],
+        format!("{name} (Profile 1)"),
+        "{status}"
+    );
+
+    // Without a profile there is none to report.
+    let mut engine = engine_with_default("chrome");
+    let status = call(&mut engine, json!({ "op": "status" }));
+    assert_eq!(status["defaultBrowserId"], "chrome", "{status}");
+    assert_eq!(status["defaultBrowserProfile"], Value::Null, "{status}");
+    assert_eq!(status["defaultBrowser"], name, "{status}");
 }
 
 #[test]

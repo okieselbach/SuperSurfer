@@ -29,6 +29,12 @@ enum SelfTest {
         check("status decodes", status?.ok == true && status?.version?.isEmpty == false)
         check("first run creates a config", status?.freshBootstrap == true && status?.configError == nil)
         check("scratch HOME is in use", status?.configPath?.hasPrefix(scratch.path) == true)
+        check(
+            "the default browser comes whole and in parts",
+            status?.defaultBrowser?.isEmpty == false
+                && status?.defaultBrowserId?.isEmpty == false
+                && status?.defaultBrowserName?.isEmpty == false
+        )
 
         let browsers = engine.browsers()
         let installed = browsers?.browsers ?? []

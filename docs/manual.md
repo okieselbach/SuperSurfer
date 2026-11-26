@@ -114,7 +114,7 @@ Changes to `config.js` take effect with the next link; there is nothing to resta
 
 Hold ⌥ Option while clicking a link. A menu opens at the pointer with your browsers and profiles; the one your rules would have used has a checkmark. Choose one to open the link there this once, or use **Always Open _site_ in** to also save a rule for the site. Escape cancels and the link is not opened.
 
-A profile is listed under the name the browser has for it. If you gave its [Dock shortcut](#dock-shortcuts) a name of your own, it is listed under that one, without the browser in front: *Work* for "Edge Work". **Recent Links** and **Saved Rules** do the same. Rest the pointer on the entry to see what the browser calls the profile, which is the name `config.js` needs.
+A profile is listed under the name the browser has for it. If you gave its [Dock shortcut](#dock-shortcuts) a name of your own, it is listed under that one, without the browser in front: *Work* for "Edge Work". **Recent Links**, **Saved Rules** and the line that names the default browser do the same. Rest the pointer on the entry to see what the browser calls the profile, which is the name `config.js` needs.
 
 Without the key nothing asks: links follow `config.js`, then the saved rules, then `defaultBrowser`.
 

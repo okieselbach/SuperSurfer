@@ -127,7 +127,14 @@ struct StatusReply: Decodable {
     let logPath: String?
     let configError: String?
     let rulesError: String?
+    /// The default browser's name, with its profile the way config.js
+    /// names it.
     let defaultBrowser: String?
+    /// The same in parts, for a line that calls the profile what the menus
+    /// call it. Nil where config.js names no browser that is installed.
+    let defaultBrowserId: String?
+    let defaultBrowserName: String?
+    let defaultBrowserProfile: String?
     let freshBootstrap: Bool?
     let landingUrl: String?
 }
