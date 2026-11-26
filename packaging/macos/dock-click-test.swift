@@ -1724,50 +1724,6 @@ func testShortcuts(
         inFront("sst-second")
     }
 
-    // TEMPORARY. In runs 53 and 78 a shortcut that was used a moment after
-    // another one did not bring its window forward: SuperSurfer asked macOS
-    // for a new window instead of choosing the profile in the browser's
-    // menu. How often does that happen, and what does SuperSurfer say why?
-    func askedForNewWindows() -> [String] {
-        let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
-        return text.components(separatedBy: "\n").filter {
-            $0.contains("a new window,") || $0.contains("is not running and is started")
-        }
-    }
-    /// Ends what such a request started: a browser with the profiles in its
-    /// own folder, which is none of the test's.
-    func endStrays() {
-        for line in mainProcesses(of: browser.binary) where !line.contains("--user-data-dir=") {
-            if let pid = line.split(separator: " ").first.flatMap({ pid_t($0) }) {
-                kill(pid, SIGKILL)
-            }
-        }
-    }
-    let askedBefore = askedForNewWindows().count
-    var missed: [String] = []
-    for round in 0..<30 {
-        let gap = [0.15, 0.3, 0.45][round % 3]
-        for (profile, page) in [(third, "sst-third"), (second, "sst-second")] {
-            lastClick = nil
-            run("/usr/bin/open", [bundle(profile)])
-            if !waitUntil(4, { inFront(page) }) {
-                missed.append("round \(round + 1), \(page), \(gap) s after the one before")
-                endStrays()
-            }
-            pause(gap)
-        }
-    }
-    say("      TEMPORARY 60 uses in a row; without their window in front after 4 s: \(missed)")
-    for line in askedForNewWindows().dropFirst(askedBefore) {
-        say("        \(line)")
-    }
-    endStrays()
-    pause(2)
-    use(second)
-    expect("the window of \(second) is in front", of: app, within: 20) {
-        inFront("sst-second")
-    }
-
     say("-- a name given in the Finder is taken up when the menu opens")
     let given = "\(browser.shortName) Privat"
     let nameBefore = bundle(third)
