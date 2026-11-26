@@ -266,6 +266,12 @@ impl Router {
         self.registry = registry;
     }
 
+    /// Reads again what the user calls their profiles, which is quick next
+    /// to a new view of the browsers. True if a name is not what it was.
+    pub fn refresh_chosen_names(&mut self) -> bool {
+        self.registry.refresh_chosen_names()
+    }
+
     /// Why `rules.json` is being ignored, if it is.
     pub fn rules_error(&self) -> Option<&str> {
         self.rules_error.as_deref()

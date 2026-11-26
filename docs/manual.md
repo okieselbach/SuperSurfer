@@ -93,6 +93,8 @@ Matcher helpers: `host`, `domain`, `suffix`, `glob`, `path`, `regex`, `all`, `no
 
 Browser targets: `"chrome"`, `"firefox:Profile Name"`, `{ name: "Microsoft Edge", profile: "Work" }`.
 
+A profile of Chrome, Edge and the like can be named in three ways, and SuperSurfer looks in this order: as the browser calls it (`"edge:Oliver"`), by its folder (`"edge:Profile 1"`), or, on macOS, by the name you gave its [Dock shortcut](#dock-shortcuts) (`"edge:Work"`). Capitals do not matter (`"edge:work"`), though only those of the letters A to Z. `rules.json` takes the same three.
+
 `ctx.modifiers` (`shift`, `alt`, `ctrl`, `cmd`) says which modifier keys were held while the link was clicked — macOS menu bar app only; `false` everywhere else.
 
 ## Menu bar app (macOS)
@@ -114,7 +116,7 @@ Changes to `config.js` take effect with the next link; there is nothing to resta
 
 Hold ⌥ Option while clicking a link. A menu opens at the pointer with your browsers and profiles; the one your rules would have used has a checkmark. Choose one to open the link there this once, or use **Always Open _site_ in** to also save a rule for the site. Escape cancels and the link is not opened.
 
-A profile is listed under the name the browser has for it. If you gave its [Dock shortcut](#dock-shortcuts) a name of your own, it is listed under that one, without the browser in front: *Work* for "Edge Work". **Recent Links**, **Saved Rules** and the line that names the default browser do the same. Rest the pointer on the entry to see what the browser calls the profile, which is the name `config.js` needs.
+A profile is listed under the name the browser has for it. If you gave its [Dock shortcut](#dock-shortcuts) a name of your own, it is listed under that one, without the browser in front: *Work* for "Edge Work". **Recent Links**, **Saved Rules** and the line that names the default browser do the same. Rest the pointer on the entry to see what the browser calls the profile. `config.js` takes either name.
 
 Without the key nothing asks: links follow `config.js`, then the saved rules, then `defaultBrowser`.
 
@@ -123,7 +125,7 @@ Without the key nothing asks: links follow `config.js`, then the saved rules, th
 macOS 27 keeps apps away from the data of browsers, and that is where Chrome, Edge, Firefox and the others keep the names of their profiles. SuperSurfer routes every link all the same. What it loses is the list of profiles:
 
 - The menu shows **⚠︎ Browser profiles cannot be read**. Browsers are listed without profiles, or with the profiles SuperSurfer read the last time it could.
-- A Chromium profile named the way the browser shows it (`"edge:Work"`) cannot be found without that list, and the link opens in the profile the browser used last. Named by its folder (`"edge:Profile 1"`, `"chrome:Default"`) it keeps working, because that needs no list. The folder is the last part of "Profile Path" on `chrome://version` or `edge://version`.
+- A Chromium profile named the way the browser shows it (`"edge:Work"`), or by the name of its Dock shortcut, cannot be found without that list, and the link opens in the profile the browser used last. Named by its folder (`"edge:Profile 1"`, `"chrome:Default"`) it keeps working, because that needs no list. The folder is the last part of "Profile Path" on `chrome://version` or `edge://version`.
 - Firefox profiles keep working by name.
 
 To give the list back, open System Settings → Privacy & Security → **Files & Folders** and switch on the browsers under SuperSurfer. macOS adds those switches the first time it refuses SuperSurfer. If SuperSurfer is not listed there, add it under **Full Disk Access** instead. Then quit SuperSurfer and open it again.
@@ -171,7 +173,8 @@ A click on it brings the window of that profile to the front. If the profile has
 - The first time, macOS asks for the Accessibility permission: System Settings → Privacy & Security → **Accessibility**, switch on SuperSurfer. Without it every click opens a new window instead of bringing the one that is there forward, and the menu entry shows ⚠︎.
 - The shortcut is an extra icon, not the browser. While the browser runs, its own icon is in the Dock as well.
 - To get rid of a shortcut, choose its profile under **Dock Shortcuts** again and then **Remove Shortcut**. The Dock keeps a question mark where it was; drag that out.
-- To call a shortcut what you call the profile, choose its profile under **Dock Shortcuts** and then **Rename…**, or rename the app in the Finder. Its icon gets the first letter of the new name, not counting the browser in front: W for "Edge Work". Which profile it opens stays the same. Under **Dock Shortcuts** the menu lists the profile as the browser calls it, with the shortcut's name behind an arrow. Everywhere else, and in the menu that [chooses a browser for one link](#choosing-a-browser-for-one-link), the profile then goes by the name you gave: *Work*. In `config.js` it keeps the name the browser has for it.
+- To call a shortcut what you call the profile, choose its profile under **Dock Shortcuts** and then **Rename…**, or rename the app in the Finder. Its icon gets the first letter of the new name, not counting the browser in front: W for "Edge Work". Which profile it opens stays the same. Under **Dock Shortcuts** the menu lists the profile as the browser calls it, with the shortcut's name behind an arrow. Everywhere else, and in the menu that [chooses a browser for one link](#choosing-a-browser-for-one-link), the profile then goes by the name you gave: *Work*. `config.js` and `rules.json` may use that name as well (`"edge:Work"`), next to what the browser calls the profile and its folder, which go on working.
+- A name is only used where it can mean one profile and no other: not if another profile of the browser already goes by it, if it is the folder of another profile, or if two shortcuts of the browser share it. It lasts as long as the shortcut has it. After the shortcut is renamed or removed, `"edge:Work"` names no profile, and a link sent there opens in the profile the browser used last. `supersurfer doctor` lists each profile with the names it has.
 - A renamed shortcut stays in the Dock. The Dock shows the new name, and on older systems the new picture, once the shortcut has been clicked again.
 - A shortcut keeps working when its profile is renamed in the browser.
 

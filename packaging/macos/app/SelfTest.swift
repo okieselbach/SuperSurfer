@@ -92,7 +92,7 @@ enum SelfTest {
 
         DockClickController.selfTest(check)
         ProfileShortcuts.selfTest(check)
-        ProfileNames.selfTest(check)
+        ProfileNames.selfTest(check, engine: engine)
 
         print(failures == 0 ? "self-test passed" : "self-test FAILED (\(failures))")
         return failures == 0 ? 0 : 1

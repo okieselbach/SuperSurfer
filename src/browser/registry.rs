@@ -1,3 +1,4 @@
+use super::shortcut_names;
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -91,16 +92,114 @@ impl UnreadableProfiles {
 pub struct BrowserRegistry {
     browsers: HashMap<String, BrowserInstall>,
     unreadable: Vec<UnreadableProfiles>,
+    /// What the user calls a profile, by browser id and profile folder: the
+    /// name they gave its Dock shortcut. See [`shortcut_names`]. It is read
+    /// with every discovery and never kept in the on-disk cache.
+    chosen: HashMap<String, HashMap<String, String>>,
 }
 
 impl BrowserRegistry {
+    fn new(browsers: HashMap<String, BrowserInstall>, unreadable: Vec<UnreadableProfiles>) -> Self {
+        BrowserRegistry {
+            browsers,
+            unreadable,
+            chosen: HashMap::new(),
+        }
+    }
+
     pub fn discover() -> Result<Self> {
-        discover_inner(false)
+        let mut registry = discover_inner(false)?;
+        registry.refresh_chosen_names();
+        Ok(registry)
     }
 
     /// Full discovery with profiles; bypasses the on-disk cache.
     pub fn discover_fresh() -> Result<Self> {
-        discover_inner(true)
+        let mut registry = discover_inner(true)?;
+        registry.refresh_chosen_names();
+        Ok(registry)
+    }
+
+    /// The folder whose contents say what the user calls their profiles:
+    /// where the macOS app keeps its Dock shortcuts. A shortcut that is
+    /// made, renamed or removed changes the folder, so a host that stays
+    /// loaded can tell from the folder alone when to call
+    /// [`BrowserRegistry::refresh_chosen_names`]. None where there are no
+    /// such shortcuts.
+    pub fn chosen_names_folder() -> Option<std::path::PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            shortcuts_folder()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
+    /// Reads again what the user calls their profiles: the Dock shortcuts of
+    /// the macOS app as they are named right now. That is one folder and a
+    /// small file for each shortcut, and nothing at all where no shortcut
+    /// was ever made. True if a name is not what it was.
+    pub fn refresh_chosen_names(&mut self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let notes = shortcuts_folder()
+                .map(|folder| shortcut_names::read_shortcuts(&folder))
+                .unwrap_or_default();
+            self.note_shortcuts(&notes)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
+    /// Takes the names from the shortcuts there are. True if a name is not
+    /// what it was.
+    #[cfg(any(target_os = "macos", test))]
+    fn note_shortcuts(&mut self, notes: &[shortcut_names::ShortcutNote]) -> bool {
+        let mut chosen = HashMap::new();
+        for install in self.browsers.values() {
+            // Only these browsers can have shortcuts.
+            if !has_profile_menu(&install.id) {
+                continue;
+            }
+            let profiles: Vec<shortcut_names::NamedProfile<'_>> = install
+                .profiles
+                .iter()
+                .filter_map(|profile| {
+                    Some(shortcut_names::NamedProfile {
+                        name: &profile.name,
+                        directory: profile.directory.as_deref()?,
+                    })
+                })
+                .collect();
+            let names = shortcut_names::chosen_names(
+                &install.id,
+                short_name(&install.id).unwrap_or(&install.display_name),
+                &install.display_name,
+                &profiles,
+                notes,
+            );
+            let named: HashMap<String, String> = profiles
+                .iter()
+                .zip(names)
+                .filter_map(|(profile, name)| Some((profile.directory.to_string(), name?)))
+                .collect();
+            if !named.is_empty() {
+                chosen.insert(install.id.clone(), named);
+            }
+        }
+        let changed = chosen != self.chosen;
+        self.chosen = chosen;
+        changed
+    }
+
+    /// What the user calls the profile that browser `id` keeps in
+    /// `directory`, where that is not what the browser calls it.
+    pub fn chosen_name(&self, id: &str, directory: &str) -> Option<&str> {
+        self.chosen.get(id)?.get(directory).map(String::as_str)
     }
 
     pub fn list(&self) -> Vec<&BrowserInstall> {
@@ -183,6 +282,17 @@ impl BrowserRegistry {
                         p.directory
                             .as_deref()
                             .is_some_and(|dir| dir.eq_ignore_ascii_case(wanted))
+                    })
+                })
+                // And by what its user calls it. No such name is the name or
+                // the folder of another profile, so this comes last and
+                // takes nothing from the two above.
+                .or_else(|| {
+                    profiles.iter().find(|p| {
+                        p.directory
+                            .as_deref()
+                            .and_then(|dir| self.chosen_name(id, dir))
+                            .is_some_and(|chosen| shortcut_names::is_chosen_name(chosen, wanted))
                     })
                 })
         });
@@ -968,10 +1078,7 @@ fn discover_inner(fresh: bool) -> Result<BrowserRegistry> {
     if !fresh {
         if let Some(cached) = load_cache(&fingerprint) {
             if let Some(browsers) = cache::rebind_app_paths(cached, live.clone()) {
-                return Ok(BrowserRegistry {
-                    browsers,
-                    unreadable: Vec::new(),
-                });
+                return Ok(BrowserRegistry::new(browsers, Vec::new()));
             }
         }
     }
@@ -997,10 +1104,7 @@ fn discover_inner(fresh: bool) -> Result<BrowserRegistry> {
     }
     report_unreadable(&unreadable);
 
-    Ok(BrowserRegistry {
-        browsers,
-        unreadable,
-    })
+    Ok(BrowserRegistry::new(browsers, unreadable))
 }
 
 /// The cache only saves work. Not being able to read or write it must never
@@ -1021,6 +1125,15 @@ fn save_cache(fingerprint: &str, browsers: &HashMap<String, BrowserInstall>) {
     if let Err(err) = crate::browser::cache::save(fingerprint, browsers) {
         warn_once(format!("warning: browser cache not written: {err:#}"));
     }
+}
+
+/// Where the macOS app keeps the Dock shortcuts it makes, each one a small
+/// app named by its user. `ProfileShortcuts.folder` in the app is the same
+/// place.
+#[cfg(target_os = "macos")]
+fn shortcuts_folder() -> Option<PathBuf> {
+    let home = directories::UserDirs::new()?.home_dir().to_path_buf();
+    Some(home.join("Applications").join("SuperSurfer Shortcuts"))
 }
 
 /// Resolve a known browser's `.app` bundle path by checking the system and
@@ -1057,18 +1170,12 @@ fn discover_inner(_fresh: bool) -> Result<BrowserRegistry> {
         }
     }
     report_unreadable(&unreadable);
-    Ok(BrowserRegistry {
-        browsers,
-        unreadable,
-    })
+    Ok(BrowserRegistry::new(browsers, unreadable))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn discover_inner(_fresh: bool) -> Result<BrowserRegistry> {
-    Ok(BrowserRegistry {
-        browsers: HashMap::new(),
-        unreadable: Vec::new(),
-    })
+    Ok(BrowserRegistry::new(HashMap::new(), Vec::new()))
 }
 
 #[cfg(target_os = "linux")]
@@ -1346,10 +1453,7 @@ fn discover_windows_cached(fresh: bool) -> Result<BrowserRegistry> {
     if !fresh {
         if let Some(cached) = load_cache(&fingerprint) {
             if let Some(browsers) = cache::rebind_app_paths(cached, live.clone()) {
-                return Ok(BrowserRegistry {
-                    browsers,
-                    unreadable: Vec::new(),
-                });
+                return Ok(BrowserRegistry::new(browsers, Vec::new()));
             }
         }
     }
@@ -1364,10 +1468,7 @@ fn discover_windows_cached(fresh: bool) -> Result<BrowserRegistry> {
 
     save_cache(&fingerprint, &browsers);
 
-    Ok(BrowserRegistry {
-        browsers,
-        unreadable: Vec::new(),
-    })
+    Ok(BrowserRegistry::new(browsers, Vec::new()))
 }
 
 /// Returns the install and, when its profile list could not be read, why.
@@ -1646,12 +1747,32 @@ mod tests {
         installs: Vec<BrowserInstall>,
         unreadable: Vec<UnreadableProfiles>,
     ) -> BrowserRegistry {
-        BrowserRegistry {
-            browsers: installs
+        BrowserRegistry::new(
+            installs
                 .into_iter()
                 .map(|install| (install.id.clone(), install))
                 .collect(),
             unreadable,
+        )
+    }
+
+    /// A Dock shortcut called `title`, as the app wrote it for the profile
+    /// that `browser` kept in `directory` and called `written_as`.
+    fn shortcut(
+        title: &str,
+        browser: &str,
+        directory: &str,
+        written_as: &str,
+    ) -> shortcut_names::ShortcutNote {
+        let short = short_name(browser).unwrap_or(browser).to_string();
+        shortcut_names::ShortcutNote {
+            title: title.to_string(),
+            browser: browser.to_string(),
+            directory: directory.to_string(),
+            profile_name: Some(written_as.to_string()),
+            name_inside: Some(format!("{short} {written_as}")),
+            browser_names: vec![short, browser.to_string()],
+            browser_path: Some(format!("/apps/{browser}")),
         }
     }
 
@@ -1735,6 +1856,138 @@ mod tests {
             folder(&registry, "chrome", "Default").as_deref(),
             Some("Profile 2")
         );
+    }
+
+    /// Edge counts its profiles from 1 and their folders from "Default": the
+    /// profile it calls "Profile 2" is in the folder "Profile 1".
+    fn edge_as_a_user_has_it() -> BrowserInstall {
+        BrowserInstall {
+            display_name: "Microsoft Edge".to_string(),
+            ..install(
+                "edge",
+                &[
+                    ("Oliver", "Default"),
+                    ("Profile 2", "Profile 1"),
+                    ("GMail", "Profile 2"),
+                ],
+            )
+        }
+    }
+
+    #[test]
+    fn a_profile_resolves_by_the_name_its_user_gave_it() {
+        let mut registry = registry(vec![edge_as_a_user_has_it()], vec![]);
+        assert_eq!(folder(&registry, "edge", "Work"), None);
+
+        let shortcuts = [
+            shortcut("Edge Work", "edge", "Default", "Oliver"),
+            shortcut("Edge Personal", "edge", "Profile 1", "Profile 2"),
+            shortcut("Edge GMail", "edge", "Profile 2", "GMail"),
+        ];
+        assert!(registry.note_shortcuts(&shortcuts));
+        assert_eq!(registry.chosen_name("edge", "Default"), Some("Work"));
+        assert_eq!(registry.chosen_name("edge", "Profile 1"), Some("Personal"));
+        // This shortcut kept the name it was given by SuperSurfer.
+        assert_eq!(registry.chosen_name("edge", "Profile 2"), None);
+
+        assert_eq!(
+            folder(&registry, "edge", "Work").as_deref(),
+            Some("Default")
+        );
+        assert_eq!(
+            folder(&registry, "edge", "work").as_deref(),
+            Some("Default")
+        );
+        assert_eq!(
+            folder(&registry, "edge", "Personal").as_deref(),
+            Some("Profile 1")
+        );
+        // What the browser says goes on working, and comes first.
+        assert_eq!(
+            folder(&registry, "edge", "Oliver").as_deref(),
+            Some("Default")
+        );
+        assert_eq!(
+            folder(&registry, "edge", "Default").as_deref(),
+            Some("Default")
+        );
+        assert_eq!(
+            folder(&registry, "edge", "Profile 2").as_deref(),
+            Some("Profile 1")
+        );
+        assert_eq!(
+            folder(&registry, "edge", "Profile 1").as_deref(),
+            Some("Profile 1")
+        );
+        assert_eq!(
+            folder(&registry, "edge", "GMail").as_deref(),
+            Some("Profile 2")
+        );
+        assert_eq!(folder(&registry, "edge", "Nobody"), None);
+        // The decision keeps the name as config.js has it.
+        let resolved = registry.resolve("edge", Some("Work")).unwrap();
+        assert_eq!(resolved.profile.as_deref(), Some("Work"));
+
+        // The same shortcuts again are no news. Without them the name is gone.
+        assert!(!registry.note_shortcuts(&shortcuts));
+        assert!(registry.note_shortcuts(&[]));
+        assert_eq!(registry.chosen_name("edge", "Default"), None);
+        assert_eq!(folder(&registry, "edge", "Work"), None);
+    }
+
+    #[test]
+    fn a_chosen_name_takes_nothing_from_a_name_or_a_folder() {
+        let mut registry = registry(vec![edge_as_a_user_has_it()], vec![]);
+        // "GMail" is another profile's name, and "Profile 2" is both a name
+        // and another profile's folder. Neither is taken as a chosen name,
+        // so both go on meaning what they meant.
+        registry.note_shortcuts(&[shortcut("Edge GMail", "edge", "Default", "Oliver")]);
+        assert_eq!(registry.chosen_name("edge", "Default"), None);
+        assert_eq!(
+            folder(&registry, "edge", "GMail").as_deref(),
+            Some("Profile 2")
+        );
+
+        registry.note_shortcuts(&[shortcut("Edge Profile 2", "edge", "Default", "Oliver")]);
+        assert_eq!(registry.chosen_name("edge", "Default"), None);
+        assert_eq!(
+            folder(&registry, "edge", "Profile 2").as_deref(),
+            Some("Profile 1")
+        );
+
+        // Two shortcuts of one name: it would mean two profiles.
+        registry.note_shortcuts(&[
+            shortcut("Edge Work", "edge", "Default", "Oliver"),
+            shortcut("Microsoft Edge work", "edge", "Profile 1", "Profile 2"),
+        ]);
+        assert_eq!(folder(&registry, "edge", "Work"), None);
+    }
+
+    #[test]
+    fn names_are_chosen_only_where_there_can_be_shortcuts() {
+        let mut registry = registry(
+            vec![
+                edge_as_a_user_has_it(),
+                install("firefox", &[("default-release", "abc.default-release")]),
+            ],
+            vec![],
+        );
+        // Firefox has no profile menu and so no shortcuts. A shortcut of
+        // another browser is none of Edge's, and one for a profile that is
+        // gone names nothing.
+        assert!(!registry.note_shortcuts(&[
+            shortcut(
+                "Firefox Work",
+                "firefox",
+                "abc.default-release",
+                "default-release"
+            ),
+            shortcut("Chrome Work", "chrome", "Default", "Person 1"),
+            shortcut("Edge Old", "edge", "Profile 7", "Former"),
+        ]));
+        assert_eq!(folder(&registry, "firefox", "Work"), None);
+        assert_eq!(folder(&registry, "edge", "Work"), None);
+        assert_eq!(folder(&registry, "edge", "Old"), None);
     }
 
     #[test]

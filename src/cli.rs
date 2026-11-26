@@ -244,8 +244,16 @@ fn cmd_doctor() -> Result<()> {
                 println!("      path: {app}");
             }
             for profile in &browser.profiles {
+                // Where its Dock shortcut was given a name, that name is one
+                // more that config.js may use for the profile.
+                let chosen = profile
+                    .directory
+                    .as_deref()
+                    .and_then(|directory| router.registry().chosen_name(&browser.id, directory))
+                    .map(|name| format!(", or \"{name}\" after its Dock shortcut"))
+                    .unwrap_or_default();
                 println!(
-                    "      profile: {} ({})",
+                    "      profile: {} ({}){chosen}",
                     profile.name,
                     profile.directory.as_deref().unwrap_or("-")
                 );

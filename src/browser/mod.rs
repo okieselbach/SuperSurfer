@@ -3,3 +3,4 @@ pub(crate) mod cache;
 
 pub mod launch;
 pub mod registry;
+pub mod shortcut_names;

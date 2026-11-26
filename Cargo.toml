@@ -1,6 +1,6 @@
 [package]
 name = "supersurfer"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2021"
 description = "Cross-platform default browser router with JavaScript config"
 license = "MIT"
@@ -11,6 +11,9 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 directories = "5"
 globset = "0.4"
+# Already in the tree by way of `url`. Named here for the names of Dock
+# shortcuts, which a Mac's disk and a browser spell differently.
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
 regex = "1"
 rquickjs = { version = "0.8", features = ["macro"] }
 serde = { version = "1", features = ["derive"] }

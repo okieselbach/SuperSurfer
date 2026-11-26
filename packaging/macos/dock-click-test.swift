@@ -1536,12 +1536,16 @@ func testShortcuts(
     /// without the browser in front.
     var chosenNames: [String: String] = [:]
     /// What they are to call a profile that is named as `given`. SuperSurfer
-    /// looks for a profile of that name first, and for one in a folder of
-    /// that name after.
+    /// looks for a profile of that name first, for one in a folder of that
+    /// name after, and last for one whose shortcut was given that name,
+    /// capitals aside.
     func shown(_ given: String) -> String {
         var folder = names.first(where: { $0.value == given })?.key
         if folder == nil, names[given] != nil {
             folder = given
+        }
+        if folder == nil {
+            folder = chosenNames.first(where: { $0.value.lowercased() == given.lowercased() })?.key
         }
         guard let found = folder else {
             return given
@@ -1755,15 +1759,21 @@ func testShortcuts(
 
     say("-- the picker calls a profile what its shortcut is called")
     chosenNames = ["Profile 1": "Work", "Profile 2": "Privat"]
-    // Three sites with a saved rule each. The first names the profile the
-    // way the browser does, which is what the picker saves. The others name
-    // a folder, as config.js may: the folder of the profile that has no
+    // Four sites with a saved rule each. The first names the profile the
+    // way the browser does, which is what the picker saves. The next two
+    // name a folder, as config.js may: the folder of the profile that has no
     // shortcut, and the folder "Profile 2". Chrome calls the profile in
     // that folder "Person 2". Edge calls it "Profile 3", and "Profile 2" is
     // what Edge calls the profile in the folder "Profile 1". SuperSurfer
     // goes by the name before the folder, so in Edge that rule means the
-    // second profile.
-    let ruled = [("sst-name.example", second), ("sst-first.example", "Default"), ("sst-folder.example", "Profile 2")]
+    // second profile. The last names a profile the way its user does, by
+    // the name its shortcut was given, in capitals of its own.
+    let ruled = [
+        ("sst-name.example", second),
+        ("sst-first.example", "Default"),
+        ("sst-folder.example", "Profile 2"),
+        ("sst-chosen.example", "privat"),
+    ]
     let savedRules: [String: Any] = [
         "version": 1,
         "rules": ruled.map { ["domain": $0.0, "browser": browser.id, "profile": $0.1] },
@@ -1821,7 +1831,8 @@ func testShortcuts(
     say("ok    and so does the list of saved rules")
 
     // And the line that names the default browser, once config.js gives
-    // that a profile.
+    // that a profile: the way the browser names it, and the way its user
+    // does.
     let config = home + "/Library/Application Support/SuperSurfer/config.js"
     let configBefore = (try? String(contentsOfFile: config, encoding: .utf8)) ?? ""
     func writeConfig(_ text: String) {
@@ -1831,21 +1842,24 @@ func testShortcuts(
             stop("config.js could not be written: \(error.localizedDescription)")
         }
     }
-    writeConfig("export default {\n  defaultBrowser: \"\(browser.id):\(second)\",\n  handlers: [],\n};\n")
-    _ = clickDownMenu([])
-    let top = entryTitles(statusMenuEntries())
-    for _ in 1...3 {
-        pressEscape()
+    for profile in [second, "WORK"] {
+        writeConfig("export default {\n  defaultBrowser: \"\(browser.id):\(profile)\",\n  handlers: [],\n};\n")
+        _ = clickDownMenu([])
+        let top = entryTitles(statusMenuEntries())
+        for _ in 1...3 {
+            pressEscape()
+        }
+        writeConfig(configBefore)
+        let named = "\(browser.name) (\(shown(profile)))"
+        let lineIsThere = top.contains { title in
+            (title.hasPrefix("Default browser: ") || title.hasPrefix("Standardbrowser: ")) && title.hasSuffix(named)
+        }
+        guard lineIsThere else {
+            stop("with \(browser.id):\(profile) as the default browser the menu does not name \(named); it begins \(Array(top.prefix(4)))")
+        }
+        say("ok    and the line for the default browser, named as \"\(profile)\": \(named)")
+        pause(0.5)
     }
-    writeConfig(configBefore)
-    let named = "\(browser.name) (\(shown(second)))"
-    let lineIsThere = top.contains { title in
-        (title.hasPrefix("Default browser: ") || title.hasPrefix("Standardbrowser: ")) && title.hasSuffix(named)
-    }
-    guard lineIsThere else {
-        stop("with \(browser.id):\(second) as the default browser the menu does not name \(named); it begins \(Array(top.prefix(4)))")
-    }
-    say("ok    and the line for the default browser: \(named)")
     use(second)
     expect("the window of \(second) is in front", of: app, within: 20) {
         inFront("sst-second")
@@ -1983,6 +1997,31 @@ func testShortcuts(
             stop("Recent Links has no entry that ends in \(browser.name) (Work): \(recent)")
         }
         say("ok    and Recent Links has it as \(browser.name) (Work)")
+        quit()
+
+        // config.js may name the profile the way its user does, by the name
+        // of its shortcut, in capitals of its own. A link that goes by that
+        // has to start the browser with the profile behind the name. That
+        // is a third start of the browser.
+        say("-- a link that config.js sends to a profile by its shortcut's name opens there")
+        let routed = "sst-first.html"
+        writeConfig("export default {\n  defaultBrowser: \"\(browser.id):work\",\n  handlers: [],\n};\n")
+        run("/usr/bin/open", ["-g", "-a", superSurfer, pages + "/" + routed])
+        var routedWith = ""
+        let arrived = waitUntil(40) {
+            guard let pid = running()?.processIdentifier else {
+                return false
+            }
+            routedWith = outputOf("/bin/ps", ["-ww", "-o", "args=", "-p", "\(pid)"])
+            return routedWith.contains("--profile-directory=Profile 1") && routedWith.contains(routed)
+        }
+        writeConfig(configBefore)
+        if !arrived {
+            whyNoStart()
+            stop("with \(browser.id):work as the default browser \(browser.name) was not started with the profile and the link: "
+                + (routedWith.isEmpty ? "not running" : routedWith))
+        }
+        say("ok    \(browser.shortName) was started with --profile-directory=Profile 1 and the link")
         quit()
     }
 }

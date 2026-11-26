@@ -27,10 +27,11 @@ extension Decision {
 /// shortcut for it and gave that a name of their own knows the profile by
 /// that name, so the menus show it: "Work" where the browser says "Oliver".
 ///
-/// This is about what is shown and nothing else. config.js, rules.json and
-/// the engine go on naming a profile the browser's way, by its name or by
-/// its folder, and what a menu entry hands to the engine is the browser's
-/// name for the profile.
+/// Which name counts is for the engine to say (src/browser/shortcut_names.rs),
+/// because config.js and rules.json may name a profile by it as well. This
+/// keeps what the engine said, and finds the profile that is meant the way
+/// the engine does. What a menu entry hands to the engine is still the
+/// browser's name for the profile.
 struct ProfileNames {
     /// One profile of a browser, as far as its names go.
     struct Profile {
@@ -51,94 +52,30 @@ struct ProfileNames {
     private let profiles: [String: [Profile]]
 
     /// Nothing is known: every profile is shown as it is given.
-    static let empty = ProfileNames(browsers: [], shortcuts: [])
+    static let empty = ProfileNames(browsers: [])
 
-    init(browsers: [ShortcutBrowser], shortcuts: [ProfileShortcut]) {
+    init(browsers: [ShortcutBrowser]) {
         var profiles: [String: [Profile]] = [:]
         for browser in browsers {
-            let candidates: [String?] = browser.profiles.map { profile in
-                shortcuts
-                    .first { $0.isFor(browser: browser.id, directory: profile.directory) }
-                    .flatMap { ProfileNames.chosenName(of: $0, for: profile, in: browser) }
-            }
-            profiles[browser.id] = browser.profiles.indices.map { index -> Profile in
-                let profile = browser.profiles[index]
-                var chosen = candidates[index]
-                // Two entries of one list must not read alike. A chosen name
-                // that another profile of the browser goes by, or that was
-                // chosen for another profile as well, is left out.
-                if let name = chosen {
-                    let taken = browser.profiles.indices.contains { other in
-                        guard other != index else {
-                            return false
-                        }
-                        if ProfileNames.readAlike(name, browser.profiles[other].name) {
-                            return true
-                        }
-                        return candidates[other].map { ProfileNames.readAlike(name, $0) } ?? false
-                    }
-                    if taken {
-                        chosen = nil
-                    }
-                }
-                return Profile(name: profile.name, directory: profile.directory, chosen: chosen)
+            profiles[browser.id] = browser.profiles.map {
+                Profile(name: $0.name, directory: $0.directory, chosen: $0.chosenName)
             }
         }
         self.profiles = profiles
     }
 
-    /// As the browsers and the folder of shortcuts are right now. This asks
-    /// the engine and reads a handful of small files, so it is for the
+    /// As the browsers and the names of the Dock shortcuts are right now.
+    /// The engine reads a handful of small files for this, so it is for the
     /// moment a menu is built and never for the way of a link.
     static func current(engine: EngineBridge) -> ProfileNames {
-        let browsers = engine.shortcuts()?.browsers ?? []
-        guard !browsers.isEmpty else {
-            return .empty
-        }
-        return ProfileNames(browsers: browsers, shortcuts: ProfileShortcut.all(in: ProfileShortcuts.folder))
-    }
-
-    /// The name a person gave the shortcut of `profile`, without the browser
-    /// in front: "Work" for "Edge Work". Nil while the shortcut has a name
-    /// SuperSurfer gave it. That includes the name it got before the profile
-    /// was renamed in the browser, which nobody chose.
-    static func chosenName(
-        of shortcut: ProfileShortcut,
-        for profile: ShortcutProfile,
-        in browser: ShortcutBrowser
-    ) -> String? {
-        var given = ProfileShortcutRules.ownTitles(
-            browser: browser.shortName,
-            profile: profile.name,
-            directory: profile.directory
-        )
-        var written = [browser.shortName]
-        if let noted = shortcut.knownBrowserNames.first {
-            written.append(noted)
-        }
-        for name in written {
-            given += ProfileShortcutRules.ownTitles(
-                browser: name,
-                profile: shortcut.profileName,
-                directory: shortcut.directory
-            )
-        }
-        guard !given.contains(shortcut.title) else {
-            return nil
-        }
-        // The same reading of the name that the letters on the shortcut's
-        // icon come from.
-        let label = ProfileShortcutRules.label(
-            of: shortcut.title,
-            browserNames: [browser.shortName, browser.name]
-        )
-        return label.isEmpty || readAlike(label, profile.name) ? nil : label
+        return ProfileNames(browsers: engine.shortcuts()?.browsers ?? [])
     }
 
     /// The profile of a browser that `given` names. The engine looks for a
-    /// profile of that name first and for one in a folder of that name
-    /// after, and so does this. Edge calls its second profile "Profile 2"
-    /// and keeps it in the folder "Profile 1", so the order matters.
+    /// profile of that name first, for one in a folder of that name after,
+    /// and last for one its user calls that. So does this. Edge calls its
+    /// second profile "Profile 2" and keeps it in the folder "Profile 1",
+    /// so the order matters.
     func profile(_ given: String, of browser: String) -> Profile? {
         guard let listed = profiles[browser] else {
             return nil
@@ -149,7 +86,14 @@ struct ProfileNames {
             // not for a menu to guess.
             return named.count == 1 ? named[0] : nil
         }
-        return listed.first { ProfileNames.engineSame($0.directory, given) }
+        if let kept = listed.first(where: { ProfileNames.engineSame($0.directory, given) }) {
+            return kept
+        }
+        // The engine gives no two profiles of a browser one such name, and
+        // none that is the name or the folder of another.
+        return listed.first { profile in
+            profile.chosen.map { ProfileNames.chosenSame($0, given) } ?? false
+        }
     }
 
     /// What the menus show for a profile that is named as `given`.
@@ -199,23 +143,34 @@ struct ProfileNames {
         return folded(one) == folded(other)
     }
 
-    /// Whether a person would take two names for the same.
-    private static func readAlike(_ one: String, _ other: String) -> Bool {
-        return one.caseInsensitiveCompare(other) == .orderedSame
+    /// As the engine compares a name that was chosen with what config.js
+    /// or rules.json has: the same way, once the letters are put together.
+    /// A Mac's disk may hand "ü" back as a "u" and the dots after it, and
+    /// the name of a shortcut comes from there.
+    static func chosenSame(_ chosen: String, _ given: String) -> Bool {
+        return engineSame(chosen, given)
+            || engineSame(chosen.precomposedStringWithCanonicalMapping, given.precomposedStringWithCanonicalMapping)
     }
 
     // MARK: - Self-test
 
-    static func selfTest(_ check: (String, Bool) -> Void) {
+    static func selfTest(_ check: (String, Bool) -> Void, engine: EngineBridge) {
         check(
             "profile names: compared the way the engine does",
             engineSame("Work", "wORK") && !engineSame("Büro", "BÜRO") && !engineSame("Work", "Work ")
         )
+        check(
+            "profile names: a chosen name is compared with its letters put together",
+            chosenSame("Caf\u{e9}", "cafe\u{301}") && chosenSame("Work", "wORK")
+                && !chosenSame("Work", "Works") && !chosenSame("Büro", "BÜRO")
+                && !engineSame("Caf\u{e9}", "Cafe\u{301}")
+        )
 
         let calculator = "/System/Applications/Calculator.app"
-        func profile(_ name: String, _ directory: String) -> ShortcutProfile {
+        func profile(_ name: String, _ directory: String, _ chosen: String? = nil) -> ShortcutProfile {
             return ShortcutProfile(
                 name: name,
+                chosenName: chosen,
                 directory: directory,
                 menuTitles: [name],
                 launchArgs: ["--profile-directory=\(directory)"]
@@ -233,113 +188,80 @@ struct ProfileNames {
         }
         // Edge counts its profiles from 1 and their folders from "Default".
         // The profile it calls "Profile 2" is in the folder "Profile 1", and
-        // the folder "Profile 2" belongs to the profile after it.
-        let oliver = profile("Oliver", "Default")
-        let second = profile("Profile 2", "Profile 1")
-        let mail = profile("GMail", "Profile 2")
-        let dev = profile("DevEnv", "Profile 3")
-        let browser = edge([dev, mail, oliver, second])
-
-        // Next to the folder of shortcuts in the scratch HOME, so that the
-        // shortcuts of the other tests are not in the way.
-        let folder = ProfileShortcuts.folder
-            .deletingLastPathComponent()
-            .appendingPathComponent("SuperSurfer Names Test", isDirectory: true)
-        do {
-            _ = try ProfileShortcut
-                .write(browser: browser, profile: oliver, into: folder, superSurfer: "/tmp/S.app")
-                .renamed(to: "Edge Work")
-            _ = try ProfileShortcut
-                .write(browser: browser, profile: second, into: folder, superSurfer: "/tmp/S.app")
-                .renamed(to: "Edge Personal")
-            let kept = try ProfileShortcut.write(browser: browser, profile: dev, into: folder, superSurfer: "/tmp/S.app")
-
-            let names = ProfileNames(browsers: [browser], shortcuts: ProfileShortcut.all(in: folder))
-            check(
-                "profile names: the name of its shortcut stands for a profile",
-                names.shown("Oliver", of: "edge") == "Work"
-                    && names.shown("oliver", of: "edge") == "Work"
-                    && names.shown("Profile 2", of: "edge") == "Personal"
-            )
-            check(
-                "profile names: a profile named by its folder is found, after the names",
-                names.shown("Default", of: "edge") == "Work"
-                    && names.shown("Profile 1", of: "edge") == "Personal"
-                    && names.shown("Profile 3", of: "edge") == "DevEnv"
-                    && names.profile("Profile 2", of: "edge")?.directory == "Profile 1"
-            )
-            check(
-                "profile names: a shortcut that kept its name changes nothing",
-                names.shown("DevEnv", of: "edge") == "DevEnv" && names.shown("GMail", of: "edge") == "GMail"
-            )
-            check(
-                "profile names: what is not known is shown as it is given",
-                names.shown("Nobody", of: "edge") == "Nobody"
-                    && names.shown("Oliver", of: "firefox") == "Oliver"
-                    && ProfileNames.empty.shown("Oliver", of: "edge") == "Oliver"
-            )
-            check(
-                "profile names: two ways of naming one profile",
-                names.same("Profile 1", "Profile 2", of: "edge")
-                    && names.same("default", "Oliver", of: "edge")
-                    && !names.same("Profile 2", "GMail", of: "edge")
-                    && names.same("work", "Work", of: "firefox")
-                    && !names.same("Work", "Home", of: "firefox")
-            )
-            check(
-                "profile names: a browser with its profile",
-                names.label(BrowserTarget(browserId: "edge", browser: "Microsoft Edge", profile: "Profile 1"))
-                    == "Microsoft Edge (Personal)"
-                    && names.label(BrowserTarget(browserId: "edge", browser: "Microsoft Edge", profile: nil))
-                    == "Microsoft Edge"
-                    && names.label(BrowserTarget(browserId: "firefox", browser: "Firefox", profile: "Work"))
-                    == "Firefox (Work)"
-            )
-            let listed = names.listed(["DevEnv", "GMail", "Oliver", "Profile 2"], of: "edge")
-            check(
-                "profile names: a list is in the order of the names it shows",
-                listed.map { $0.shown } == ["DevEnv", "GMail", "Personal", "Work"]
-                    && listed.map { $0.given } == ["DevEnv", "GMail", "Profile 2", "Oliver"]
-            )
-            let untouched = ProfileNames.empty.listed(["b", "A"], of: "edge")
-            check(
-                "profile names: and as it came where no name was chosen",
-                untouched.map { $0.given } == ["b", "A"] && untouched.map { $0.shown } == ["b", "A"]
-            )
-
-            // The profile was renamed in the browser. Its shortcut still has
-            // the name SuperSurfer gave it, and that is not a chosen one.
-            let renamed = edge([profile("Development", "Profile 3"), mail, oliver, second])
-            let later = ProfileNames(browsers: [renamed], shortcuts: ProfileShortcut.all(in: folder))
-            check(
-                "profile names: a name the shortcut got from SuperSurfer is no chosen one",
-                later.shown("Profile 3", of: "edge") == "Development"
-                    && later.shown("Development", of: "edge") == "Development"
-                    && later.shown("Oliver", of: "edge") == "Work"
-            )
-
-            let other = try kept.renamed(to: "Edge GMail")
-            let clash = ProfileNames(browsers: [browser], shortcuts: ProfileShortcut.all(in: folder))
-            check(
-                "profile names: a name that another profile has is not taken",
-                clash.shown("DevEnv", of: "edge") == "DevEnv"
-                    && clash.shown("GMail", of: "edge") == "GMail"
-                    && clash.shown("Oliver", of: "edge") == "Work"
-            )
-            _ = try other.renamed(to: "Microsoft Edge work")
-            let twice = ProfileNames(browsers: [browser], shortcuts: ProfileShortcut.all(in: folder))
-            check(
-                "profile names: nor one that two shortcuts carry",
-                twice.shown("DevEnv", of: "edge") == "DevEnv"
-                    && twice.shown("Oliver", of: "edge") == "Oliver"
-                    && twice.shown("Profile 2", of: "edge") == "Personal"
-            )
-        } catch {
-            check("profile names: shortcuts could be written (\(error.localizedDescription))", false)
-        }
+        // the folder "Profile 2" belongs to the profile after it. Two of the
+        // four have a name the engine took from their shortcuts.
+        let browser = edge([
+            profile("DevEnv", "Profile 3"),
+            profile("GMail", "Profile 2"),
+            profile("Oliver", "Default", "Work"),
+            profile("Profile 2", "Profile 1", "Personal"),
+        ])
+        let names = ProfileNames(browsers: [browser])
+        check(
+            "profile names: the name the engine has for a profile stands for it",
+            names.shown("Oliver", of: "edge") == "Work"
+                && names.shown("oliver", of: "edge") == "Work"
+                && names.shown("Profile 2", of: "edge") == "Personal"
+        )
+        check(
+            "profile names: a profile named by its folder is found, after the names",
+            names.shown("Default", of: "edge") == "Work"
+                && names.shown("Profile 1", of: "edge") == "Personal"
+                && names.shown("Profile 3", of: "edge") == "DevEnv"
+                && names.profile("Profile 2", of: "edge")?.directory == "Profile 1"
+        )
+        check(
+            "profile names: and one named the way its user calls it, after both",
+            names.profile("Work", of: "edge")?.directory == "Default"
+                && names.profile("personal", of: "edge")?.directory == "Profile 1"
+                && names.shown("wORK", of: "edge") == "Work"
+        )
+        check(
+            "profile names: a profile nobody gave a name keeps the browser's",
+            names.shown("DevEnv", of: "edge") == "DevEnv" && names.shown("GMail", of: "edge") == "GMail"
+        )
+        check(
+            "profile names: what is not known is shown as it is given",
+            names.shown("Nobody", of: "edge") == "Nobody"
+                && names.shown("Oliver", of: "firefox") == "Oliver"
+                && ProfileNames.empty.shown("Oliver", of: "edge") == "Oliver"
+        )
+        check(
+            "profile names: three ways of naming one profile",
+            names.same("Profile 1", "Profile 2", of: "edge")
+                && names.same("default", "Oliver", of: "edge")
+                && names.same("work", "Oliver", of: "edge")
+                && names.same("Work", "Default", of: "edge")
+                && !names.same("Work", "Personal", of: "edge")
+                && !names.same("Profile 2", "GMail", of: "edge")
+                && names.same("work", "Work", of: "firefox")
+                && !names.same("Work", "Home", of: "firefox")
+        )
+        check(
+            "profile names: a browser with its profile",
+            names.label(BrowserTarget(browserId: "edge", browser: "Microsoft Edge", profile: "Profile 1"))
+                == "Microsoft Edge (Personal)"
+                && names.label(BrowserTarget(browserId: "edge", browser: "Microsoft Edge", profile: "work"))
+                == "Microsoft Edge (Work)"
+                && names.label(BrowserTarget(browserId: "edge", browser: "Microsoft Edge", profile: nil))
+                == "Microsoft Edge"
+                && names.label(BrowserTarget(browserId: "firefox", browser: "Firefox", profile: "Work"))
+                == "Firefox (Work)"
+        )
+        let listed = names.listed(["DevEnv", "GMail", "Oliver", "Profile 2"], of: "edge")
+        check(
+            "profile names: a list is in the order of the names it shows",
+            listed.map { $0.shown } == ["DevEnv", "GMail", "Personal", "Work"]
+                && listed.map { $0.given } == ["DevEnv", "GMail", "Profile 2", "Oliver"]
+        )
+        let untouched = ProfileNames.empty.listed(["b", "A"], of: "edge")
+        check(
+            "profile names: and as it came where no name was chosen",
+            untouched.map { $0.given } == ["b", "A"] && untouched.map { $0.shown } == ["b", "A"]
+        )
 
         let twins = edge([profile("Work", "Profile 1"), profile("Work", "Profile 2")])
-        let unsure = ProfileNames(browsers: [twins], shortcuts: [])
+        let unsure = ProfileNames(browsers: [twins])
         check(
             "profile names: of two profiles with one name neither is guessed",
             unsure.profile("Work", of: "edge") == nil
@@ -347,5 +269,68 @@ struct ProfileNames {
                 && unsure.same("work", "Work", of: "edge")
                 && unsure.profile("Profile 2", of: "edge")?.directory == "Profile 2"
         )
+
+        selfTestBothEnds(check, engine: engine)
+    }
+
+    /// Both ends of a chosen name. The app writes a shortcut and gives it
+    /// another name, as the menu does. The engine reads that, says what the
+    /// profile is called now, and takes the name for the profile.
+    private static func selfTestBothEnds(_ check: (String, Bool) -> Void, engine: EngineBridge) {
+        // Chrome keeps its profile list under HOME, which is a scratch
+        // folder here, so the profiles are these two wherever Chrome is.
+        let home = ProfileShortcuts.folder.deletingLastPathComponent().deletingLastPathComponent()
+        let chromeData = home.appendingPathComponent("Library/Application Support/Google/Chrome", isDirectory: true)
+        let list = #"{"profile":{"info_cache":{"Default":{"name":"Personal"},"Profile 1":{"name":"Work"}}}}"#
+        try? FileManager.default.createDirectory(at: chromeData, withIntermediateDirectories: true)
+        try? Data(list.utf8).write(to: chromeData.appendingPathComponent("Local State"))
+        _ = engine.reload()
+
+        func chrome() -> ShortcutBrowser? {
+            return engine.shortcuts()?.browsers?.first { $0.id == "chrome" }
+        }
+        func personal(_ browser: ShortcutBrowser?) -> ShortcutProfile? {
+            return browser?.profiles.first { $0.directory == "Default" }
+        }
+        guard let browser = chrome(), let profile = personal(browser) else {
+            print("skip  profile names: the engine reads the shortcuts (no Google Chrome on this Mac)")
+            return
+        }
+        do {
+            let written = try ProfileShortcut.write(
+                browser: browser,
+                profile: profile,
+                into: ProfileShortcuts.folder,
+                superSurfer: "/tmp/S.app"
+            )
+            let asWritten = personal(chrome())
+            check(
+                "profile names: the name SuperSurfer gave a shortcut is no chosen one for the engine",
+                written.title == "Chrome Personal" && asWritten != nil && asWritten?.chosenName == nil
+            )
+
+            _ = try written.renamed(to: "Chrome Büro")
+            let names = ProfileNames.current(engine: engine)
+            check(
+                "profile names: the engine reads the name a shortcut was given",
+                personal(chrome())?.chosenName == "Büro"
+                    && names.shown("Personal", of: "chrome") == "Büro"
+                    && names.shown("Default", of: "chrome") == "Büro"
+                    && names.profile("büro", of: "chrome")?.directory == "Default"
+                    && names.shown("Work", of: "chrome") == "Work"
+            )
+            let plan = engine.plan(url: "https://example.com/", inputUrl: nil, browserId: "chrome", profile: "büro")
+            check(
+                "profile names: and takes that name for the profile, as config.js may write it",
+                plan?.ok == true && plan?.launch?.args.contains("--profile-directory=Default") == true
+            )
+            let other = engine.plan(url: "https://example.com/", inputUrl: nil, browserId: "chrome", profile: "Work")
+            check(
+                "profile names: the browser's own name for a profile works as before",
+                other?.launch?.args.contains("--profile-directory=Profile 1") == true
+            )
+        } catch {
+            check("profile names: a shortcut could be written (\(error.localizedDescription))", false)
+        }
     }
 }

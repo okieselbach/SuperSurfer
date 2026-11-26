@@ -77,6 +77,11 @@ struct BrowsersReply: Decodable {
 /// A browser profile that can have a shortcut in the Dock.
 struct ShortcutProfile: Decodable {
     let name: String
+    /// What the user calls the profile, where that is something else: the
+    /// name they gave its Dock shortcut, without the browser in front. The
+    /// engine says which name counts, and takes it in config.js and
+    /// rules.json as well.
+    var chosenName: String? = nil
     /// The folder the browser keeps the profile in: what never changes.
     let directory: String
     /// What the browser may call the profile in its own profile menu, most
