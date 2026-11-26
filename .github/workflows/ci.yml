@@ -247,6 +247,8 @@ jobs:
 
           **macOS:** unzip into \`/Applications\`. The app is not notarized yet, so macOS refuses a downloaded copy until you run \`xattr -cr /Applications/SuperSurfer.app\`. Then \`/Applications/SuperSurfer.app/Contents/MacOS/SuperSurfer register\`.
 
+          **Updating on macOS:** quit SuperSurfer, replace the app, run the \`xattr\` line again and open it. Releases are not signed with a Developer ID yet, so macOS wants the app's permissions given again: Accessibility, and on macOS 27 and later Files & Folders for the browsers. If a switch does not stay on, run \`tccutil reset All dev.supersurfer.app\` and give them once more. See [Updating on macOS](https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/README.md#updating-on-macos).
+
           **Linux:** extract the tarball for your arch and run \`./install.sh\`.
 
           See the [manual](https://github.com/${GITHUB_REPOSITORY}/blob/${tag}/docs/manual.md).

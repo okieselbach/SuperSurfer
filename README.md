@@ -43,6 +43,8 @@ xattr -cr /Applications/SuperSurfer.app    # once per download: the app is not n
 
 `register` also starts the app. It stays in the menu bar from then on — see [Menu bar app](#menu-bar-app-macos).
 
+Putting a new version in the place of an older one? macOS then wants the app's permissions given again: see [Updating on macOS](#updating-on-macos).
+
 **Windows:**
 
 ```powershell
@@ -68,6 +70,33 @@ Config lives at:
 - macOS: `~/Library/Application Support/SuperSurfer/config.js`
 - Windows: `%APPDATA%\SuperSurfer\config.js`
 - Linux: `~/.config/SuperSurfer/config.js`
+
+### Updating on macOS
+
+Choose **Quit SuperSurfer** in its menu, put the new app in the place of the old one in `/Applications`, run the `xattr -cr` line again and open the app. `config.js`, `rules.json` and your Dock shortcuts are not part of the app and stay as they are.
+
+**Expect to give the app its permissions again.** macOS notes a permission together with the signature of the app it gave it to. Releases are not signed with a Developer ID yet. The signature they have instead is a different one for every build, so to macOS a new version is not the app that has the permission. Two permissions are concerned:
+
+- **Accessibility**, which only [Dock Click](#dock-click) and the [Dock Shortcuts](#dock-shortcuts) need. After an update the switch in System Settings may still look on and no longer count. Their entries in SuperSurfer's menu carry a ⚠︎ while it is missing.
+- **Files & Folders** for the browsers, which macOS 27 and later ask for before SuperSurfer may read the names of browser profiles. After an update a switch there may jump back to off as soon as you switch it on. The menu shows **⚠︎ Browser profiles cannot be read** while it is missing.
+
+Links are routed all the same in the meantime. What is missing is what each permission is for. Without Accessibility a click on a Dock shortcut opens a new window and Dock Click does nothing. Without the browsers' folders SuperSurfer goes by the profiles it read the last time it could, and a profile it does not know from then is only found when `config.js` names it by its folder.
+
+If a switch does not stay on, or is on and does not help, start over:
+
+1. Quit SuperSurfer.
+2. Take back what macOS has noted for it:
+
+   ```bash
+   tccutil reset All dev.supersurfer.app
+   ```
+
+3. Open SuperSurfer and its menu once, so that macOS makes the switches anew. Quit it again.
+4. Under System Settings → Privacy & Security → **Files & Folders**, switch on the browsers under SuperSurfer (macOS 27 and later), and open SuperSurfer.
+
+The reset takes back the Accessibility permission as well. Dock Click and the Dock shortcuts ask for it again.
+
+This is what helped on macOS 27 after the update from 0.2.0 to 0.3.0. A Developer ID signature stays the same from one version to the next and would end this. Releases have none [yet](#status).
 
 ## Example config
 
@@ -117,7 +146,7 @@ If `config.js` stops loading — a typo, a half-saved file — links keep follow
 
 The icon can be dragged out of the menu bar with ⌘ held. Opening the app again (`open -a SuperSurfer`, Spotlight, Finder) brings it back and shows the menu.
 
-macOS 27 and later keep apps away from browser data, which includes the names of browser profiles. Links are routed all the same; the menu then shows **⚠︎ Browser profiles cannot be read** and says how to allow access. Until then a Chromium profile is only found when named by its folder (`"edge:Profile 1"`). Details, and what to do when the switch for a browser jumps back to off after an update: [manual](docs/manual.md#browser-profiles-on-macos-27-and-later).
+macOS 27 and later keep apps away from browser data, which includes the names of browser profiles. Links are routed all the same; the menu then shows **⚠︎ Browser profiles cannot be read** and says how to allow access. Until then a Chromium profile is only found when named by its folder (`"edge:Profile 1"`). Details: [manual](docs/manual.md#browser-profiles-on-macos-27-and-later). What to do when the switch for a browser jumps back to off after an update: [Updating on macOS](#updating-on-macos).
 
 ### Picker
 
@@ -163,7 +192,7 @@ A click that could only be acted on more than a second after it was made is drop
 
 **Permission.** The first time you choose *Hide App* or *Minimize Windows*, macOS asks for the Accessibility permission (System Settings → Privacy & Security → Accessibility). SuperSurfer needs it to ask the Dock which icon is under the pointer and to minimize another app's windows. It works from the next click. Until the permission is there, the menu entry carries a ⚠︎ and clicks behave as always.
 
-macOS ties this permission to the app's signature, and releases are not signed with a Developer ID yet. After an update the switch in System Settings still looks on but no longer counts: remove SuperSurfer from that list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
+macOS ties this permission to the app's signature, and releases are not signed with a Developer ID yet. After an update the switch in System Settings still looks on but no longer counts: remove SuperSurfer from that list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more. [Updating on macOS](#updating-on-macos) has the whole of it.
 
 **What it costs.** A global event monitor sees the mouse button go down and come up. It only listens, so no click is held back or changed. The window server writes into each click which window it went to, and for a click that did not go to the Dock reading that is all that happens: 0.01 to 0.02 ms on the main thread, measured on GitHub's macOS runners, and 0.2 ms in the one run where the machine was busy. Only a click on the Dock leads to more: a look at which app is in front, on the main thread, and a question to the Dock about the icon, on a queue of its own with a timeout of 0.4 s. Minimizing and restoring windows runs on a second queue. Neither the main thread nor the queue that routes links ever waits for another app. Between clicks the app is as idle as before.
 
@@ -470,7 +499,7 @@ v0.3.x is usable as a default browser on macOS, Windows, and Linux:
 - macOS, Windows, and Linux browser discovery + launch
 - CLI: `init`, `doctor`, `test`, `rules`, `logs`
 
-**Not yet:** signed/notarized distribution, signed rules updates. Until the app is notarized, macOS refuses to open a downloaded copy — run `xattr -cr /Applications/SuperSurfer.app` once, or allow it under System Settings → Privacy & Security → Open Anyway. Without a Developer ID signature, macOS also forgets two permissions with every update: reading browser profiles (macOS 27 and later) and Accessibility, which only [Dock Click](#dock-click) and [Dock Shortcuts](#dock-shortcuts) need.
+**Not yet:** signed/notarized distribution, signed rules updates. Until the app is notarized, macOS refuses to open a downloaded copy — run `xattr -cr /Applications/SuperSurfer.app` once, or allow it under System Settings → Privacy & Security → Open Anyway. Without a Developer ID signature, macOS also forgets two permissions with every update: reading browser profiles (macOS 27 and later) and Accessibility, which only [Dock Click](#dock-click) and [Dock Shortcuts](#dock-shortcuts) need. [Updating on macOS](#updating-on-macos) says how to give them again.
 
 ## License
 
