@@ -314,8 +314,16 @@ pub struct StatusReply {
     pub log_path: Option<String>,
     pub config_error: Option<String>,
     pub rules_error: Option<String>,
-    /// Display name of `defaultBrowser`.
+    /// Display name of `defaultBrowser`, with its profile in brackets the
+    /// way config.js names it.
     pub default_browser: Option<String>,
+    /// The same in parts: the browser's id, its display name, and the
+    /// profile the way config.js names it. A menu that calls profiles by
+    /// names of its own puts its line together from these. None where
+    /// `defaultBrowser` names no browser that is installed.
+    pub default_browser_id: Option<String>,
+    pub default_browser_name: Option<String>,
+    pub default_browser_profile: Option<String>,
     /// True once, right after this run created the initial config.
     pub fresh_bootstrap: bool,
     pub landing_url: &'static str,
@@ -587,17 +595,21 @@ impl Engine {
 
     pub fn status(&mut self) -> StatusReply {
         self.refresh();
-        let default_browser = self.router.as_ref().and_then(|router| {
-            let spec = router.default_browser_spec().ok()?;
-            let (id, profile) = parse_browser_spec(&spec);
-            Some(match router.registry().resolve(&id, profile.as_deref()) {
-                Ok(resolved) => match resolved.profile {
-                    Some(profile) => format!("{} ({profile})", resolved.display_name),
-                    None => resolved.display_name,
-                },
-                Err(_) => spec,
-            })
+        let default_spec = self
+            .router
+            .as_ref()
+            .and_then(|router| router.default_browser_spec().ok());
+        let default_resolved = self.router.as_ref().and_then(|router| {
+            let (id, profile) = parse_browser_spec(default_spec.as_deref()?);
+            router.registry().resolve(&id, profile.as_deref()).ok()
         });
+        let default_browser = match &default_resolved {
+            Some(resolved) => Some(match &resolved.profile {
+                Some(profile) => format!("{} ({profile})", resolved.display_name),
+                None => resolved.display_name.clone(),
+            }),
+            None => default_spec,
+        };
         StatusReply {
             ok: true,
             version: env!("CARGO_PKG_VERSION"),
@@ -618,6 +630,13 @@ impl Engine {
                 .as_ref()
                 .and_then(|router| router.rules_error().map(str::to_string)),
             default_browser,
+            default_browser_id: default_resolved
+                .as_ref()
+                .map(|resolved| resolved.id.clone()),
+            default_browser_name: default_resolved
+                .as_ref()
+                .map(|resolved| resolved.display_name.clone()),
+            default_browser_profile: default_resolved.and_then(|resolved| resolved.profile),
             fresh_bootstrap: std::mem::take(&mut self.fresh_bootstrap),
             landing_url: crate::bootstrap::LANDING_URL,
         }

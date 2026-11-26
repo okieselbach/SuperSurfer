@@ -1418,7 +1418,7 @@ func testShortcuts(
     func answeredStarts() -> Int {
         let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
         return text.components(separatedBy: "\n")
-            .filter { $0.contains("accepted it after") || $0.contains("was started with the profile") }
+            .filter { $0.contains("accepted it after") || $0.contains(": macOS has answered") }
             .count
     }
     /// What there is to see when a start that SuperSurfer asked macOS for
@@ -1819,6 +1819,33 @@ func testShortcuts(
         stop("Saved Rules has no \"\(domain) → \(browser.name) (\(shown(profile)))\"; it has \(rulesShown)")
     }
     say("ok    and so does the list of saved rules")
+
+    // And the line that names the default browser, once config.js gives
+    // that a profile.
+    let config = home + "/Library/Application Support/SuperSurfer/config.js"
+    let configBefore = (try? String(contentsOfFile: config, encoding: .utf8)) ?? ""
+    func writeConfig(_ text: String) {
+        do {
+            try text.write(toFile: config, atomically: true, encoding: .utf8)
+        } catch {
+            stop("config.js could not be written: \(error.localizedDescription)")
+        }
+    }
+    writeConfig("export default {\n  defaultBrowser: \"\(browser.id):\(second)\",\n  handlers: [],\n};\n")
+    _ = clickDownMenu([])
+    let top = entryTitles(statusMenuEntries())
+    for _ in 1...3 {
+        pressEscape()
+    }
+    writeConfig(configBefore)
+    let named = "\(browser.name) (\(shown(second)))"
+    let lineIsThere = top.contains { title in
+        (title.hasPrefix("Default browser: ") || title.hasPrefix("Standardbrowser: ")) && title.hasSuffix(named)
+    }
+    guard lineIsThere else {
+        stop("with \(browser.id):\(second) as the default browser the menu does not name \(named); it begins \(Array(top.prefix(4)))")
+    }
+    say("ok    and the line for the default browser: \(named)")
     use(second)
     expect("the window of \(second) is in front", of: app, within: 20) {
         inFront("sst-second")
@@ -2063,7 +2090,10 @@ func testUnanswered(home: String, superSurfer: String, trace: String) {
     say("ok    it is there: \(sleepers())")
     // More than the second SuperSurfer waits for an answer.
     pause(3)
-    if traced("Stuck Test: the browser was not running and was started with the profile") {
+    guard traced("Stuck Test: the browser is not running and is started with the profile") else {
+        giveUp("SuperSurfer's trace does not say that it asked macOS for the app")
+    }
+    if traced("Stuck Test: macOS has answered") {
         // Then this test does not test what it is for any more.
         giveUp("macOS has answered the start of an app that never got through it")
     }

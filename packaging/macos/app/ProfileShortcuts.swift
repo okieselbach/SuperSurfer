@@ -1089,15 +1089,19 @@ final class ProfileShortcuts {
 
         func openWindow(_ why: String) {
             stage.enter("asking macOS to open a window of the profile")
+            // Said now and not when macOS answers. An answer can take long
+            // or never come, and then the trace of a click ended with
+            // "asked for" and nothing about what was done and why.
+            ProfileShortcuts.trace("\(shortcut.title): \(why)")
             Launcher.openProfileWindow(appPath: browserPath, arguments: arguments) { error in
                 // An error here need not mean that nothing was started: a
                 // browser that starts itself again while starting is
                 // reported as one that could not be launched.
                 if let error = error {
                     NSLog("SuperSurfer: %@: macOS reports for the browser: %@", shortcut.title, error.localizedDescription)
-                    ProfileShortcuts.trace("\(shortcut.title): \(why); macOS reports: \(error.localizedDescription)")
+                    ProfileShortcuts.trace("\(shortcut.title): macOS has answered: \(error.localizedDescription)")
                 } else {
-                    ProfileShortcuts.trace("\(shortcut.title): \(why)")
+                    ProfileShortcuts.trace("\(shortcut.title): macOS has answered")
                 }
             }
         }
@@ -1107,7 +1111,7 @@ final class ProfileShortcuts {
                 .first { !$0.isTerminated && $0.activationPolicy == .regular }
         }
         guard let browser = running else {
-            openWindow("the browser was not running and was started with the profile")
+            openWindow("the browser is not running and is started with the profile")
             return
         }
         guard AXIsProcessTrusted() else {
