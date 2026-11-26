@@ -1418,7 +1418,7 @@ func testShortcuts(
     func answeredStarts() -> Int {
         let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
         return text.components(separatedBy: "\n")
-            .filter { $0.contains("accepted it after") || $0.contains("was started with the profile") }
+            .filter { $0.contains("accepted it after") || $0.contains(": macOS has answered") }
             .count
     }
     /// What there is to see when a start that SuperSurfer asked macOS for
@@ -1721,6 +1721,50 @@ func testShortcuts(
     }
     use(second)
     expect("under its new name it brings the window of \(second) forward", of: app, within: 20) {
+        inFront("sst-second")
+    }
+
+    // TEMPORARY. In runs 53 and 78 a shortcut that was used a moment after
+    // another one did not bring its window forward: SuperSurfer asked macOS
+    // for a new window instead of choosing the profile in the browser's
+    // menu. How often does that happen, and what does SuperSurfer say why?
+    func askedForNewWindows() -> [String] {
+        let text = (try? String(contentsOfFile: trace, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n").filter {
+            $0.contains("a new window,") || $0.contains("is not running and is started")
+        }
+    }
+    /// Ends what such a request started: a browser with the profiles in its
+    /// own folder, which is none of the test's.
+    func endStrays() {
+        for line in mainProcesses(of: browser.binary) where !line.contains("--user-data-dir=") {
+            if let pid = line.split(separator: " ").first.flatMap({ pid_t($0) }) {
+                kill(pid, SIGKILL)
+            }
+        }
+    }
+    let askedBefore = askedForNewWindows().count
+    var missed: [String] = []
+    for round in 0..<30 {
+        let gap = [0.15, 0.3, 0.45][round % 3]
+        for (profile, page) in [(third, "sst-third"), (second, "sst-second")] {
+            lastClick = nil
+            run("/usr/bin/open", [bundle(profile)])
+            if !waitUntil(4, { inFront(page) }) {
+                missed.append("round \(round + 1), \(page), \(gap) s after the one before")
+                endStrays()
+            }
+            pause(gap)
+        }
+    }
+    say("      TEMPORARY 60 uses in a row; without their window in front after 4 s: \(missed)")
+    for line in askedForNewWindows().dropFirst(askedBefore) {
+        say("        \(line)")
+    }
+    endStrays()
+    pause(2)
+    use(second)
+    expect("the window of \(second) is in front", of: app, within: 20) {
         inFront("sst-second")
     }
 
@@ -2090,7 +2134,10 @@ func testUnanswered(home: String, superSurfer: String, trace: String) {
     say("ok    it is there: \(sleepers())")
     // More than the second SuperSurfer waits for an answer.
     pause(3)
-    if traced("Stuck Test: the browser was not running and was started with the profile") {
+    guard traced("Stuck Test: the browser is not running and is started with the profile") else {
+        giveUp("SuperSurfer's trace does not say that it asked macOS for the app")
+    }
+    if traced("Stuck Test: macOS has answered") {
         // Then this test does not test what it is for any more.
         giveUp("macOS has answered the start of an app that never got through it")
     }
