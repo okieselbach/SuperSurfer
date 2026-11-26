@@ -20,14 +20,16 @@
 # Two things are only done where CI is set, as on a GitHub runner, because
 # they change the Mac they run on: one shortcut is put into the Dock and
 # clicked there, which restarts the Dock, and a browser that is not running
-# is started, which uses its real profiles: through a shortcut, and a
-# second time by choosing a profile in the picker under the name of its
-# shortcut.
+# is started, which uses its real profiles: through a shortcut, a second
+# time by choosing a profile in the picker under the name of its shortcut,
+# and a third time by a link that config.js sends to the profile by that
+# name.
 #
 # The last step is about what SuperSurfer does when macOS does not answer a
 # start. It has SuperSurfer start an app that only sleeps, and then sends a
 # link that goes to Safari, which has to open it all the same. It needs
-# neither Edge nor Chrome, and it opens one page in Safari.
+# neither Edge nor Chrome, and it opens one page in Safari. SuperSurfer is
+# started anew for it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -38,6 +40,8 @@ SCRATCH="$(mktemp -d)"
 SUPPORT="$SCRATCH/Library/Application Support/SuperSurfer"
 DRIVER="$SCRATCH/dock-click-test"
 TRACE="$SCRATCH/trace.log"
+# What the SuperSurfer of the last step writes.
+TRACE_LAST="$SCRATCH/trace-last.log"
 PID=""
 
 cleanup() {
@@ -89,6 +93,33 @@ app_is_running() {
   esac
 }
 
+app_is_gone() {
+  ! app_is_running "$1"
+}
+
+start_supersurfer() {
+  # start_supersurfer <trace file>: --resident prints one line on stderr per
+  # shortcut it wrote or was asked by, and per link it handed on.
+  HOME="$SCRATCH" "$BIN" --resident 2>"$1" &
+  PID=$!
+  if ! wait_for 30 app_is_running dev.supersurfer.app; then
+    echo "FAIL: the app did not come up" >&2
+    return 1
+  fi
+  sleep 1
+}
+
+stop_supersurfer() {
+  if [ -n "$PID" ]; then
+    kill "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
+  fi
+  # Launch Services lists it for a moment longer, and SuperSurfer does not
+  # start beside one that is listed.
+  wait_for 10 app_is_gone dev.supersurfer.app || true
+}
+
 for RUNNING in dev.supersurfer.app:SuperSurfer com.microsoft.edgemac:"Microsoft Edge" com.google.Chrome:"Google Chrome"; do
   if app_is_running "${RUNNING%%:*}"; then
     echo "FAIL: ${RUNNING#*:} is running. Quit it first." >&2
@@ -124,14 +155,7 @@ if [ "${CI:-}" = true ]; then
   EXTRAS=(dock start)
 fi
 
-# --resident prints one line on stderr per shortcut it wrote or was asked by.
-HOME="$SCRATCH" "$BIN" --resident 2>"$TRACE" &
-PID=$!
-if ! wait_for 30 app_is_running dev.supersurfer.app; then
-  echo "FAIL: the app did not come up" >&2
-  exit 1
-fi
-sleep 1
+start_supersurfer "$TRACE" || exit 1
 
 STATUS=0
 for BROWSER in edge chrome; do
@@ -143,24 +167,37 @@ for BROWSER in edge chrome; do
 done
 
 # Last, because SuperSurfer is left with a start that macOS never answers.
+# And with a SuperSurfer of its own, which has asked macOS for nothing yet.
+# The one above may still be waiting for an answer: macOS answers the start
+# of a browser that was quit while it started about five seconds after the
+# start (run 83 of the CI), and one that was quit a little later perhaps
+# never. A SuperSurfer that waits sends what it is asked for next the other
+# way round, which is what this step is to bring about by itself.
 if [ "$STATUS" -eq 0 ]; then
-  echo "== a start that macOS does not answer"
-  "$DRIVER" unanswered "$SCRATCH" "$APP" "$TRACE" || STATUS=$?
+  stop_supersurfer
+  if start_supersurfer "$TRACE_LAST"; then
+    echo "== a start that macOS does not answer"
+    "$DRIVER" unanswered "$SCRATCH" "$APP" "$TRACE_LAST" || STATUS=$?
+  else
+    STATUS=1
+  fi
 fi
 
-kill "$PID" 2>/dev/null || true
-wait "$PID" 2>/dev/null || true
-PID=""
+stop_supersurfer
 sed 's/^/trace: /' "$TRACE"
+if [ -f "$TRACE_LAST" ]; then
+  sed 's/^/trace, last step: /' "$TRACE_LAST"
+fi
 if [ "$STATUS" -ne 0 ]; then
   exit "$STATUS"
 fi
 
 # A shortcut that cannot reach SuperSurfer says so in the system log and
-# opens a window by itself. SuperSurfer was running all the time, so none
-# should have had to. Reading the log needs an administrator; where that
-# fails, nothing is concluded. Only what "logger" wrote counts: "log" itself
-# puts this very question into the log, with the words it asks for.
+# opens a window by itself. SuperSurfer was running whenever a shortcut was
+# used, so none should have had to. Reading the log needs an administrator;
+# where that fails, nothing is concluded. Only what "logger" wrote counts:
+# "log" itself puts this very question into the log, with the words it asks
+# for.
 NOTE="could not reach SuperSurfer"
 ALONE="$(log show --last 15m --style compact \
   --predicate "process == \"logger\" AND eventMessage CONTAINS \"$NOTE\"" 2>/dev/null | grep "$NOTE" || true)"

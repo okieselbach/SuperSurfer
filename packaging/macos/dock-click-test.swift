@@ -2040,6 +2040,13 @@ func testShortcuts(
 /// The app made here never gets through its start: its program is a script
 /// that sleeps. SuperSurfer is asked to start it the way it starts a
 /// browser that is not running, and then for a link that goes to Safari.
+///
+/// This needs a SuperSurfer that is not waiting for an answer already. One
+/// that is sends the start of the sleeping app the other way round, and the
+/// test would not see what it is for. Run 83 of the CI was like that: a
+/// browser of the steps before had been quit half a second after SuperSurfer
+/// started it, and macOS answered that start five seconds later. So the
+/// script starts SuperSurfer anew for this, with a trace of its own.
 func testUnanswered(home: String, superSurfer: String, trace: String) {
     let files = FileManager.default
     // A time nothing else sleeps for, to find the process by.
@@ -2132,6 +2139,10 @@ func testUnanswered(home: String, superSurfer: String, trace: String) {
     guard traced("Stuck Test: the browser is not running and is started with the profile") else {
         giveUp("SuperSurfer's trace does not say that it asked macOS for the app")
     }
+    if traced("Stuck.app is asked for through /usr/bin/open") {
+        // Then SuperSurfer was waiting for another answer before this one.
+        giveUp("SuperSurfer sent the start of the app through /usr/bin/open: it was waiting for the answer to an earlier start, and this test has to begin without one")
+    }
     if traced("Stuck Test: macOS has answered") {
         // Then this test does not test what it is for any more.
         giveUp("macOS has answered the start of an app that never got through it")
@@ -2155,14 +2166,13 @@ func testUnanswered(home: String, superSurfer: String, trace: String) {
     }
     say(String(format: "ok    and Safari shows the page, %.1f s after the link was sent", Date().timeIntervalSince(began)))
 
-    // Ten seconds after a request that macOS has not answered. That is the
-    // sleeping app, unless a browser of the steps before was quit at a
-    // moment that left its start unanswered as well: then it is that one.
+    // Ten seconds after a request that macOS has not answered, which here
+    // is the one for the sleeping app.
     say("-- the system log gets a line about the answer that does not come")
     func note() -> String? {
         return ((try? String(contentsOfFile: trace, encoding: .utf8)) ?? "")
             .components(separatedBy: "\n")
-            .first { $0.hasPrefix("SuperSurfer: macOS was asked for ") && $0.contains(" s ago and has not answered") }
+            .first { $0.hasPrefix("SuperSurfer: macOS was asked for Stuck.app ") && $0.contains(" s ago and has not answered") }
     }
     guard waitUntil(20, { note() != nil }) else {
         giveUp("SuperSurfer's trace has no line about a start that macOS did not answer")
