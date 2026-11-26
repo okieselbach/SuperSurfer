@@ -36,6 +36,17 @@ The first line is needed once per download: the app is not notarized yet, and ma
 
 From source: `mise run package-macos` and copy `dist/SuperSurfer.app` into `/Applications`.
 
+#### Updating to a new version
+
+Choose **Quit SuperSurfer** in its menu, put the new app in the place of the old one in `/Applications`, run the `xattr -cr` line again and open the app. `config.js`, `rules.json` and your Dock shortcuts are not part of the app and stay as they are.
+
+Expect to give the app its permissions again. macOS notes a permission together with the signature of the app it gave it to. Releases are not signed with a Developer ID yet, and the signature they have instead is a different one for every build. To macOS a new version is therefore not the app that has the permission. Links are routed all the same.
+
+- **Accessibility** is what [Dock Click](#dock-click) and the [Dock shortcuts](#dock-shortcuts) need. The switch may still look on and no longer count: remove SuperSurfer from the Accessibility list and add it again.
+- **Files & Folders** for the browsers is what macOS 27 and later ask for before SuperSurfer may read the names of browser profiles. A switch there may jump back to off as soon as you switch it on.
+
+If a switch does not stay on, or is on and does not help, `tccutil reset All dev.supersurfer.app` takes back everything macOS has noted for SuperSurfer, and the permissions can be given anew. [Browser profiles on macOS 27 and later](#browser-profiles-on-macos-27-and-later) has the steps.
+
 ### Windows
 
 Download `supersurfer.exe`, then:
@@ -213,6 +224,8 @@ Copy your `~/.finicky.js` into `config.js`, add a `/** @type {import('./supersur
 **No profiles, or links open in the wrong profile (macOS 27 and later)** — macOS no longer lets apps read browser data unasked. See [Browser profiles on macOS 27 and later](#browser-profiles-on-macos-27-and-later). The same section says what to do when the switch under Files & Folders jumps back to off after an update.
 
 **"Apple could not verify…" when opening the app (macOS)** — run `xattr -cr /Applications/SuperSurfer.app` once after downloading.
+
+**After an update a permission is gone, or its switch will not stay on (macOS)** — releases are not signed with a Developer ID yet, so macOS takes every new version for another app. See [Updating to a new version](#updating-to-a-new-version).
 
 **Dock Click does nothing (macOS)** — the menu entry shows ⚠︎ while the Accessibility permission is missing. If System Settings shows SuperSurfer as switched on, the permission belongs to an older build: remove SuperSurfer from the list and add it again, or run `tccutil reset Accessibility dev.supersurfer.app` and choose the option once more.
 
